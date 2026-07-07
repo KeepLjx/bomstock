@@ -1,0 +1,12 @@
+.next/
+node_modules/
+.env.local
+.env*.local
+.claude/
+dist/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+:root {
+  --g-blue: #1a73e8;
+  --g-blue-hover: #1765cc;
+  --g-border: #dadce0;
+  --g-bg: #f8f9fa;
+  --g-text: #202124;
+  --g-text-sec: #5f6368;
+}
+
+html,
+body {
+  font-family:
+    "Google Sans", "Roboto", system-ui, -apple-system, "Segoe UI",
+    "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* 滚动条美化（表格区） */
+.g-scroll::-webkit-scrollbar {
+  height: 10px;
+  width: 10px;
+}
+.g-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+.g-scroll::-webkit-scrollbar-thumb {
+  background: #dadce0;
+  border-radius: 8px;
+}
+.g-scroll::-webkit-scrollbar-thumb:hover {
+  background: #bdc1c6;
+}
+
+/* 可编辑单元格聚焦样式 —— 保持透明背景，让带色单元格的底色可见 */
+.cell-input:focus {
+  outline: none;
+}
+
+/* 列宽调整手柄 —— 在 div.relative 内做绝对定位，z-index 确保可点击 */
+.col-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 9px;
+  cursor: col-resize;
+  z-index: 20;
+  touch-action: none;
+}
+.col-resizer::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 3px;
+  border-radius: 2px;
+  background: #c4c7c5;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, width 0.12s;
+}
+.col-resizer:hover::after,
+.col-resizer.active::after {
+  opacity: 1;
+  background: var(--g-blue);
+  width: 4px;
+}
+
+/* 行高调整手柄 */
+.row-resizer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 7px;
+  cursor: row-resize;
+  z-index: 20;
+  touch-action: none;
+}
+.row-resizer::after {
+  content: "";
+  position: absolute;
+  left: 25%;
+  right: 25%;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 3px;
+  border-radius: 2px;
+  background: #c4c7c5;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s;
+}
+.row-resizer:hover::after,
+.row-resizer.active::after {
+  opacity: 1;
+  background: var(--g-blue);
+}
