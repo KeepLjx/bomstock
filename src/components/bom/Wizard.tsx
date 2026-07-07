@@ -33,6 +33,18 @@ export default function Wizard() {
     setStep("config");
   };
 
+  const handleFileUpdated = (updatedFile: UploadResponse["files"][number]) => {
+    setUpload((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        files: prev.files.map((file) =>
+          file.storedName === updatedFile.storedName ? updatedFile : file,
+        ),
+      };
+    });
+  };
+
   const handleExecute = async (payload: ProcessPayload) => {
     setError(null);
     setProcessing(true);
@@ -129,7 +141,9 @@ export default function Wizard() {
 
       {step === "config" && upload && (
         <ConfigPanel
+          jobId={upload.jobId}
           files={upload.files}
+          onFileUpdated={handleFileUpdated}
           onExecute={handleExecute}
           onBack={restart}
           processing={processing}

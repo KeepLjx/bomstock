@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { type ParsedFileDTO } from "./types";
 
 export interface ProcessPayload {
@@ -16,7 +16,9 @@ export interface ProcessPayload {
 }
 
 interface Props {
+  jobId: string;
   files: ParsedFileDTO[];
+  onFileUpdated: (file: ParsedFileDTO) => void;
   onExecute: (payload: ProcessPayload) => Promise<void>;
   onBack: () => void;
   processing: boolean;
@@ -43,7 +45,9 @@ const INV_FIELDS: { key: string; label: string; required?: boolean }[] = [
 ];
 
 export default function ConfigPanel({
+  jobId,
   files,
+  onFileUpdated,
   onExecute,
   onBack,
   processing,
@@ -84,6 +88,8 @@ export default function ConfigPanel({
     [bomFiles, roles],
   );
   const targetFile = files.find((f) => f.storedName === targetStored);
+  const inventoryFile = files.find((f) => f.storedName === inventoryStored);
+  const workOrderFile = files.find((f) => f.storedName === workOrderStored);
 
   const autoPick = (
     file: ParsedFileDTO | undefined,
@@ -124,6 +130,15 @@ export default function ConfigPanel({
   const [runPhase3, setRunPhase3] = useState(
     bomFiles.some((f) => roles[f.storedName] === "occupied"),
   );
+  const [sheetUpdating, setSheetUpdating] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    setTargetMapping(autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key)));
+  }, [targetFile?.storedName, targetFile?.mainSheet]);
+
+  useEffect(() => {
+    setInvMapping(autoPick(inventoryFile, INV_FIELDS.map((m) => m.key)));
+  }, [inventoryFile?.storedName, inventoryFile?.mainSheet]);
 
   const ensureMapping = () => {
     if (targetFile && Object.keys(targetMapping).length === 0) {
@@ -148,6 +163,29 @@ export default function ConfigPanel({
     !!targetMapping.bomCodeColumn &&
     (!invFiles.length ||
       (!!inventoryStored && !!invMapping.codeColumn && !!invMapping.qtyColumn));
+
+  const handleSheetChange = async (storedName: string, sheetName: string) => {
+    if (!sheetName) return;
+    setSheetUpdating((prev) => ({ ...prev, [storedName]: true }));
+    try {
+      const res = await fetch("/api/bom/sheet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId, storedName, sheetName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "切换 sheet 失败");
+      }
+      onFileUpdated(data.file as ParsedFileDTO);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "切换 sheet 失败，请稍后重试";
+      window.alert(message);
+    } finally {
+      setSheetUpdating((prev) => ({ ...prev, [storedName]: false }));
+    }
+  };
 
   const handleExecute = () => {
     if (!targetStored) return;
@@ -217,6 +255,22 @@ export default function ConfigPanel({
               </button>
             ))}
           </div>
+          {inventoryFile && (
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,280px)_1fr]">
+              <SheetSelect
+                label="库存表 Sheet"
+                value={inventoryFile.mainSheet}
+                sheets={inventoryFile.sheets}
+                disabled={processing || !!sheetUpdating[inventoryFile.storedName]}
+                onChange={(sheetName) =>
+                  handleSheetChange(inventoryFile.storedName, sheetName)
+                }
+              />
+              <p className="text-xs text-[#5f6368]">
+                当前计算使用所选库存 sheet 的物料编码与总数量数据。
+              </p>
+            </div>
+          )}
           {inventoryStored && (
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               {INV_FIELDS.map((field) => (
@@ -225,10 +279,7 @@ export default function ConfigPanel({
                   label={field.label}
                   required={field.required}
                   value={invMapping[field.key]}
-                  options={
-                    files.find((f) => f.storedName === inventoryStored)
-                      ?.headers ?? []
-                  }
+                  options={inventoryFile?.headers ?? []}
                   onChange={(v) =>
                     setInvMapping((p) => ({ ...p, [field.key]: v }))
                   }
@@ -270,6 +321,22 @@ export default function ConfigPanel({
               </button>
             ))}
           </div>
+          {workOrderFile && (
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,280px)_1fr]">
+              <SheetSelect
+                label="工单报表 Sheet"
+                value={workOrderFile.mainSheet}
+                sheets={workOrderFile.sheets}
+                disabled={processing || !!sheetUpdating[workOrderFile.storedName]}
+                onChange={(sheetName) =>
+                  handleSheetChange(workOrderFile.storedName, sheetName)
+                }
+              />
+              <p className="text-xs text-[#5f6368]">
+                切换后，工单确认判断会基于当前 sheet 重新计算是否跳过扣减。
+              </p>
+            </div>
+          )}
           {workOrderStored && occupied.length > 0 && (
             <p className="mt-2 text-xs text-[#5f6368]">
               ✓ 将检查工单中「成品名称」是否包含各已占用 BOM 的产品名（如
@@ -288,6 +355,7 @@ export default function ConfigPanel({
                 <th className="px-4 py-2 text-left font-medium">文件名</th>
                 <th className="px-4 py-2 text-left font-medium">角色</th>
                 <th className="px-4 py-2 text-left font-medium">套数</th>
+                <th className="px-4 py-2 text-left font-medium">计算 Sheet</th>
                 <th className="px-4 py-2 text-left font-medium">一博编码</th>
               </tr>
             </thead>
@@ -344,6 +412,21 @@ export default function ConfigPanel({
                       className="w-20 rounded-md border border-[#dadce0] px-2 py-1.5 text-sm focus:border-[#1a73e8] focus:outline-none focus:ring-1 focus:ring-[#1a73e8]"
                     />
                     <span className="ml-1 text-xs text-[#9aa0a6]">套</span>
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <SheetSelect
+                      label="BOM Sheet"
+                      hideLabel
+                      value={f.mainSheet}
+                      sheets={f.sheets}
+                      disabled={processing || !!sheetUpdating[f.storedName]}
+                      onChange={(sheetName) =>
+                        handleSheetChange(f.storedName, sheetName)
+                      }
+                    />
+                    <div className="mt-1 text-xs text-[#9aa0a6]">
+                      当前计算 sheet：{f.mainSheet}
+                    </div>
                   </td>
                   <td className="px-4 py-2.5">
                     {f.hasYiboCode ? (
@@ -483,6 +566,42 @@ function ColumnSelect({
         {options.map((o) => (
           <option key={o.col} value={o.name}>
             {o.name}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function SheetSelect({
+  label,
+  value,
+  sheets,
+  onChange,
+  disabled,
+  hideLabel,
+}: {
+  label: string;
+  value: string;
+  sheets: string[];
+  onChange: (v: string) => void;
+  disabled?: boolean;
+  hideLabel?: boolean;
+}) {
+  return (
+    <label className="block">
+      {!hideLabel && (
+        <span className="text-sm font-medium text-[#3c4043]">{label}</span>
+      )}
+      <select
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onChange(e.target.value)}
+        className={`${hideLabel ? "" : "mt-1 "}w-full rounded-md border border-[#dadce0] bg-white px-2.5 py-1.5 text-sm focus:border-[#1a73e8] focus:outline-none focus:ring-1 focus:ring-[#1a73e8] disabled:cursor-not-allowed disabled:bg-[#f8f9fa]`}
+      >
+        {sheets.map((sheet) => (
+          <option key={sheet} value={sheet}>
+            {sheet}
           </option>
         ))}
       </select>
