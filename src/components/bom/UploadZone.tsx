@@ -5,6 +5,9 @@ import { KIND_LABELS } from "./types";
 interface Props {
   onConfirmed: (res: UploadResponse) => void;
   onError: (msg: string) => void;
+  /** 退回此步骤时恢复的已确认任务（保留已上传文件列表） */
+  initialJobId?: string | null;
+  initialFiles?: ParsedFileDTO[];
 }
 const KIND_ICON: Record<ParsedFileDTO["kind"], string> = {
   bom: "🧾",
@@ -12,9 +15,14 @@ const KIND_ICON: Record<ParsedFileDTO["kind"], string> = {
   bills: "📑",
   transfer: "📋",
 };
-export default function UploadZone({ onConfirmed, onError }: Props) {
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [files, setFiles] = useState<ParsedFileDTO[]>([]);
+export default function UploadZone({
+  onConfirmed,
+  onError,
+  initialJobId,
+  initialFiles,
+}: Props) {
+  const [jobId, setJobId] = useState<string | null>(initialJobId ?? null);
+  const [files, setFiles] = useState<ParsedFileDTO[]>(initialFiles ?? []);
   const [dragOver, setDragOver] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [removing, setRemoving] = useState<Record<string, boolean>>({});
@@ -116,7 +124,7 @@ export default function UploadZone({ onConfirmed, onError }: Props) {
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* 左：上传区 */}
-        <div className="lg:col-span-3">
+        <div className="flex lg:col-span-3">
           <div
             onDragOver={(e) => {
               e.preventDefault();
@@ -129,7 +137,7 @@ export default function UploadZone({ onConfirmed, onError }: Props) {
               if (e.dataTransfer.files.length > 0) upload(e.dataTransfer.files);
             }}
             onClick={() => addInputRef.current?.click()}
-            className={`flex min-h-[200px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-8 py-10 text-center transition ${
+            className={`flex h-full min-h-[280px] w-full cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed px-8 py-10 text-center transition ${
               dragOver
                 ? "border-[#1a73e8] bg-[#e8f0fe]"
                 : "border-[#dadce0] bg-[#f8f9fa] hover:border-[#1a73e8] hover:bg-[#f1f3f4]"

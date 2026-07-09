@@ -80,42 +80,81 @@ export default function Wizard() {
     setError(null);
     setStep("upload");
   };
+  // 退回上传步骤修改文件（保留已确认的数据，不整体重置）
+  const backToUpload = () => {
+    setError(null);
+    setStep("upload");
+  };
 
   const currentStepIndex = STEPS.findIndex((s) => s.key === step);
-
+  // 各步骤是否已到达（具备展示所需数据）—— 决定能否点击切换
+  const reached: Record<Step, boolean> = {
+    upload: true,
+    config: !!upload,
+    result: !!upload && !!summary && !!table,
+  };
+  // 点击步骤切换：仅在「已到达」时允许，从而可退回上一步修改
+  const gotoStep = (target: Step) => {
+    if (!reached[target]) return;
+    setError(null);
+    setStep(target);
+  };
   return (
     <div className="space-y-6">
-      {/* 步骤指示器 */}
+      {/* 步骤指示器（可点击切换已到达的步骤） */}
       <div className="flex items-center justify-center">
-        {STEPS.map((s, i) => (
-          <div key={s.key} className="flex items-center">
-            <div className="flex flex-col items-center">
-              <div
-                className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition ${
-                  i <= currentStepIndex
-                    ? "bg-[#1a73e8] text-white"
-                    : "bg-[#f1f3f4] text-[#9aa0a6]"
+        {STEPS.map((s, i) => {
+          const clickable = reached[s.key];
+          const done = i < currentStepIndex && reached[s.key];
+          const active = i === currentStepIndex;
+          return (
+            <div key={s.key} className="flex items-center">
+              <button
+                type="button"
+                onClick={() => gotoStep(s.key)}
+                disabled={!clickable}
+                title={
+                  clickable ? `切换到「${s.label}」` : "该步骤尚未到达"
+                }
+                className={`flex flex-col items-center outline-none ${
+                  clickable
+                    ? "cursor-pointer"
+                    : "cursor-not-allowed"
                 }`}
               >
-                {i < currentStepIndex ? "✓" : i + 1}
-              </div>
-              <span
-                className={`mt-1.5 text-xs ${
-                  i <= currentStepIndex ? "text-[#1a73e8]" : "text-[#9aa0a6]"
-                }`}
-              >
-                {s.label}
-              </span>
+                <div
+                  className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition ${
+                    active
+                      ? "bg-[#1a73e8] text-white ring-4 ring-[#1a73e8]/20"
+                      : done
+                        ? "bg-[#1a73e8] text-white hover:bg-[#1765cc]"
+                        : "bg-[#f1f3f4] text-[#9aa0a6]"
+                  }`}
+                >
+                  {done ? "✓" : i + 1}
+                </div>
+                <span
+                  className={`mt-1.5 text-xs transition ${
+                    active
+                      ? "font-medium text-[#1a73e8]"
+                      : reached[s.key]
+                        ? "text-[#1a73e8] hover:underline"
+                        : "text-[#9aa0a6]"
+                  }`}
+                >
+                  {s.label}
+                </span>
+              </button>
+              {i < STEPS.length - 1 && (
+                <div
+                  className={`mx-3 h-px w-12 sm:w-20 ${
+                    i < currentStepIndex ? "bg-[#1a73e8]" : "bg-[#dadce0]"
+                  }`}
+                />
+              )}
             </div>
-            {i < STEPS.length - 1 && (
-              <div
-                className={`mx-3 h-px w-12 sm:w-20 ${
-                  i < currentStepIndex ? "bg-[#1a73e8]" : "bg-[#dadce0]"
-                }`}
-              />
-            )}
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* 错误/警告提示 */}
@@ -133,19 +172,24 @@ export default function Wizard() {
       )}
 
       {/* 步骤内容 */}
-      {step === "upload" && (
+       {step === "upload" && (
         <div className="space-y-6">
-          <UploadZone onConfirmed={handleConfirmed} onError={setError} />
+          <UploadZone
+            onConfirmed={handleConfirmed}
+            onError={setError}
+            initialJobId={upload?.jobId}
+            initialFiles={upload?.files}
+          />
         </div>
       )}
 
-      {step === "config" && upload && (
+     {step === "config" && upload && (
         <ConfigPanel
           jobId={upload.jobId}
           files={upload.files}
           onFileUpdated={handleFileUpdated}
           onExecute={handleExecute}
-          onBack={restart}
+          onBack={backToUpload}
           processing={processing}
         />
       )}
