@@ -133,11 +133,19 @@ export async function POST(req: NextRequest) {
       yiboWarning,
     });
   } catch (e) {
+    console.error("bom upload failed", e);
+    const cause =
+      e instanceof Error && e.cause instanceof Error ? e.cause.message : "";
+    const msg =
+      e instanceof Error
+        ? cause
+          ? `${e.message}; cause: ${cause}`
+          : e.message
+        : String(e);
     return NextResponse.json(
-      { error: `上传失败：${(e as Error).message}` },
+      { error: `上传失败：${msg}` },
       { status: 500 },
     );
   }
 }
-
 

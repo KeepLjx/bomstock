@@ -4,7 +4,7 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { db } from "@/db";
 import { bomJobs } from "@/db/schema";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, sql } from "drizzle-orm";
 import type { JobState, ParsedFile, WorkflowConfig, WorkflowSummary } from "./types";
 
 // ============================================================================
@@ -57,13 +57,14 @@ export function fileExists(jobId: string, storedName: string): boolean {
 
 /** 从 JobState 构建可入库的记录 */
 function stateToRow(jobId: string, name: string, state: JobState) {
+  const jsonb = (v: unknown) => (v === null ? null : sql`${JSON.stringify(v)}::jsonb`);
   return {
     id: jobId,
     name,
     status: state.status,
-    files: state.files as unknown,
-    config: (state.config ?? null) as unknown,
-    summary: (state.summary ?? null) as unknown,
+    files: jsonb(state.files),
+    config: jsonb(state.config ?? null),
+    summary: jsonb(state.summary ?? null),
     outputFileName: state.outputFileName ?? null,
     error: state.error ?? null,
     updatedAt: new Date(),
@@ -84,11 +85,12 @@ export async function updateJob(
   name: string,
   patch: Partial<JobState>,
 ): Promise<void> {
+  const jsonb = (v: unknown) => (v === null ? null : sql`${JSON.stringify(v)}::jsonb`);
   const set: Record<string, unknown> = { updatedAt: new Date() };
   if (patch.status !== undefined) set.status = patch.status;
-  if (patch.files !== undefined) set.files = patch.files as unknown;
-  if (patch.config !== undefined) set.config = patch.config as unknown;
-  if (patch.summary !== undefined) set.summary = patch.summary as unknown;
+  if (patch.files !== undefined) set.files = jsonb(patch.files);
+  if (patch.config !== undefined) set.config = jsonb(patch.config ?? null);
+  if (patch.summary !== undefined) set.summary = jsonb(patch.summary ?? null);
   if (patch.outputFileName !== undefined) set.outputFileName = patch.outputFileName;
   if (patch.error !== undefined) set.error = patch.error;
   await db
