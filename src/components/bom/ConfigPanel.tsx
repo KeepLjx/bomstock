@@ -1,7 +1,7 @@
 "use client";
-
 import { useEffect, useMemo, useState } from "react";
 import { type ParsedFileDTO } from "./types";
+import SheetPreviewModal from "./SheetPreviewModal";
 
 export interface ProcessPayload {
   targetStoredName: string;
@@ -43,6 +43,59 @@ const INV_FIELDS: { key: string; label: string; required?: boolean }[] = [
   { key: "codeColumn", label: "物料编码", required: true },
   { key: "qtyColumn", label: "总数量", required: true },
 ];
+/**
+ * 各列字段的别名集合（用于按名称自动匹配列）。
+ * 库存表字段一般为固定名称，优先据此默认选中。
+ */
+const FIELD_ALIASES: Record<string, string[]> = {
+  // 目标 BOM 列
+  quantityColumn: ["Quantity", "数量", "Qty", "BOM数量", "总用量"],
+  usageColumn: ["单机用量", "用量", "每台用量", "单台用量", "Quantity", "Qty"],
+  bomCodeColumn: ["存货编码", "物料编码", "存货编号", "料号", "编码", "Part"],
+  yiboCodeColumn: ["一博物料编码", "一博编码", "一博料号", "YIBO"],
+  yiboStockColumn: ["一博物料库存", "一博库存", "一博库存量", "库存"],
+  yiboProblemColumn: ["一博问题", "问题", "一博备注"],
+  partStatusColumn: ["零件状态", "物料状态", "状态"],
+  // 库存表列（固定字段名）
+  codeColumn: [
+    "物料编码",
+    "一博物料编码",
+    "存货编码",
+    "物料编号",
+    "料号",
+    "编码",
+    "Code",
+    "Part",
+  ],
+  qtyColumn: [
+    "总数量",
+    "现存数量",
+    "库存数量",
+    "可用数量",
+    "数量",
+    "总库存",
+    "Qty",
+    "Stock",
+  ],
+};
+/** 按别名匹配列名：先精确（忽略大小写），再包含；长别名优先避免误匹配 */
+function matchField(
+  headerNames: string[],
+  aliases: string[],
+): string | undefined {
+  const sorted = [...aliases].sort((a, b) => b.length - a.length);
+  for (const a of sorted) {
+    const al = a.toLowerCase();
+    const exact = headerNames.find((n) => n.toLowerCase() === al);
+    if (exact) return exact;
+  }
+  for (const a of sorted) {
+    const al = a.toLowerCase();
+    const inc = headerNames.find((n) => n.toLowerCase().includes(al));
+    if (inc) return inc;
+  }
+  return undefined;
+}
 
 export default function ConfigPanel({
   jobId,
@@ -99,18 +152,15 @@ export default function ConfigPanel({
     if (!file) return out;
     const names = file.headers.map((h) => h.name);
     for (const key of keys) {
-      const def = MAPPING_FIELDS.find((m) => m.key === key);
+      const def = [...MAPPING_FIELDS, ...INV_FIELDS].find((m) => m.key === key);
       const label = def?.label ?? key;
-      const kw = label
+      // 标签关键词作为补充别名
+      const labelKw = label
         .replace(/[（）()/]/g, " ")
         .split(/[\s/]+/)
         .filter((x) => x.length >= 2);
-      const found = names.find((n) =>
-        kw.some(
-          (k) => n.includes(k) || n.toLowerCase().includes(k.toLowerCase()),
-        ),
-      );
-      out[key] = found;
+      const aliases = [...(FIELD_ALIASES[key] ?? []), ...labelKw];
+      out[key] = matchField(names, aliases);
     }
     return out;
   };
@@ -131,6 +181,8 @@ export default function ConfigPanel({
     bomFiles.some((f) => roles[f.storedName] === "occupied"),
   );
   const [sheetUpdating, setSheetUpdating] = useState<Record<string, boolean>>({});
+  // 预览弹窗目标文件
+  const [previewFile, setPreviewFile] = useState<ParsedFileDTO | null>(null);
 
   useEffect(() => {
     setTargetMapping(autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key)));
@@ -156,8 +208,11 @@ export default function ConfigPanel({
   );
   const ignoredSheets = files.flatMap((f) => f.ignoredChangeLog ?? []);
 
+  // 目标 BOM 缺少「一博物料编码」时禁止执行
+  const targetMissingYibo = !!targetFile && !targetFile.hasYiboCode;
   const canExecute =
     !!targetStored &&
+    !targetMissingYibo &&
     !!targetMapping.quantityColumn &&
     !!targetMapping.usageColumn &&
     !!targetMapping.bomCodeColumn &&
@@ -255,7 +310,7 @@ export default function ConfigPanel({
               </button>
             ))}
           </div>
-          {inventoryFile && (
+{inventoryFile && (
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,280px)_1fr]">
               <SheetSelect
                 label="库存表 Sheet"
@@ -266,9 +321,18 @@ export default function ConfigPanel({
                   handleSheetChange(inventoryFile.storedName, sheetName)
                 }
               />
-              <p className="text-xs text-[#5f6368]">
-                当前计算使用所选库存 sheet 的物料编码与总数量数据。
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-[#5f6368]">
+                  当前计算使用所选库存 sheet 的物料编码与总数量数据。
+                  当前计算使用所选库存 sheet 的物料编码与总数量数据。
+                </p>
+                <button
+                  onClick={() => setPreviewFile(inventoryFile)}
+                  className="rounded-full border border-[#dadce0] px-3 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#e8f0fe]"
+                >
+                  👁 预览
+                </button>
+              </div>
             </div>
           )}
           {inventoryStored && (
@@ -332,9 +396,17 @@ export default function ConfigPanel({
                   handleSheetChange(workOrderFile.storedName, sheetName)
                 }
               />
-              <p className="text-xs text-[#5f6368]">
-                切换后，工单确认判断会基于当前 sheet 重新计算是否跳过扣减。
-              </p>
+              <div className="flex items-center justify-between gap-3">
+                <p className="text-xs text-[#5f6368]">
+                  切换后，工单确认判断会基于当前 sheet 重新计算是否跳过扣减。
+                </p>
+                <button
+                  onClick={() => setPreviewFile(workOrderFile)}
+                  className="rounded-full border border-[#dadce0] px-3 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#e8f0fe]"
+                >
+                  👁 预览
+                </button>
+              </div>
             </div>
           )}
           {workOrderStored && occupied.length > 0 && (
@@ -363,10 +435,18 @@ export default function ConfigPanel({
               {bomFiles.map((f) => (
                 <tr key={f.storedName} className="bg-white">
                   <td className="px-4 py-2.5">
-                    <div className="font-medium text-[#202124]">{f.originalName}</div>
-                    <div className="text-xs text-[#9aa0a6]">
-                      {f.mainSheet} · {f.rowCount} 行
-                    </div>
+                    <button
+                      onClick={() => setPreviewFile(f)}
+                      className="group text-left"
+                      title="点击预览该表数据"
+                    >
+                      <div className="font-medium text-[#1a73e8] group-hover:underline">
+                        {f.originalName}
+                      </div>
+                      <div className="text-xs text-[#9aa0a6]">
+                        {f.mainSheet} · {f.rowCount} 行 · 👁 预览
+                      </div>
+                    </button>
                   </td>
                   <td className="px-4 py-2.5">
                     <select
@@ -434,8 +514,8 @@ export default function ConfigPanel({
                         ✓ 含
                       </span>
                     ) : (
-                      <span className="inline-flex items-center rounded-full bg-[#fef7e0] px-2 py-0.5 text-xs font-medium text-[#b06000]">
-                        ⚠ 缺失
+                      <span className="inline-flex animate-pulse items-center rounded-full bg-[#fce8e6] px-2.5 py-0.5 text-xs font-bold text-[#d93025] ring-1 ring-[#d93025]/40">
+                        ⚠ 一博物料编码缺失
                       </span>
                     )}
                   </td>
@@ -507,11 +587,28 @@ export default function ConfigPanel({
           {processing ? "执行中…" : "开始匹配"}
         </button>
       </div>
-      {!canExecute && (
+  {targetMissingYibo && (
+        <div className="flex items-start gap-2 rounded-lg border-2 border-[#d93025]/50 bg-[#fce8e6] p-3 text-sm text-[#a50e0e]">
+          <span className="leading-none">🚫</span>
+          <div>
+            目标 BOM 缺少「一博物料编码」列，无法获取一博库存信息，请返回上传含该列的文件后再执行。
+          </div>
+        </div>
+      )}
+      {!canExecute && !targetMissingYibo && (
         <p className="text-right text-xs text-[#d93025]">
           请补全必选列映射（Quantity、单机用量、物料编码
           {invFiles.length ? "、库存表列" : ""}）
         </p>
+      )}
+      {/* 预览弹窗 */}
+      {previewFile && (
+        <SheetPreviewModal
+          jobId={jobId}
+          storedName={previewFile.storedName}
+          originalName={previewFile.originalName}
+          onClose={() => setPreviewFile(null)}
+        />
       )}
     </div>
   );

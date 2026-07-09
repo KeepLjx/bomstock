@@ -96,7 +96,13 @@ export interface ProcessResponse {
   addedColumns: string[];
   outputFileName: string;
 }
-
+/** 预览弹窗数据（基于清洗后的 CSV） */
+export interface PreviewResponse {
+  columns: string[];
+  rows: string[][];
+  totalRows: number;
+  limited: number;
+}
 export const KIND_LABELS: Record<ParsedFileDTO["kind"], string> = {
   bom: "BOM 文件",
   inventory: "库存表",

@@ -54,6 +54,15 @@ export function fileExists(jobId: string, storedName: string): boolean {
     return false;
   }
 }
+/** 删除任务目录中的指定文件（xlsx / csv 等） */
+export function removeJobFile(jobId: string, storedName: string): void {
+  try {
+    const fp = filePathOf(jobId, storedName);
+    if (fp && fs.existsSync(fp)) fs.unlinkSync(fp);
+  } catch {
+    // 忽略删除失败
+  }
+}
 
 /** 从 JobState 构建可入库的记录 */
 function stateToRow(jobId: string, name: string, state: JobState) {

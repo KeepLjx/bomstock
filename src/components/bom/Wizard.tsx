@@ -27,9 +27,9 @@ export default function Wizard() {
   const [error, setError] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
 
-  const handleUploaded = (res: UploadResponse) => {
+  const handleConfirmed = (res: UploadResponse) => {
     setUpload(res);
-    setError(res.yiboWarning);
+    setError(null);
     setStep("config");
   };
 
@@ -135,7 +135,7 @@ export default function Wizard() {
       {/* 步骤内容 */}
       {step === "upload" && (
         <div className="space-y-6">
-          <UploadZone onUploaded={handleUploaded} onError={setError} />
+          <UploadZone onConfirmed={handleConfirmed} onError={setError} />
         </div>
       )}
 
