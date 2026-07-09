@@ -565,3 +565,47 @@ export async function cleanExcelToCSV(
     ignoredChangeLog,
   };
 }
+
+/**
+ * 从已生成的 CSV + 表头中检测「生产套数」。
+ * 用于「已占用 BOM」自动读取套数并默认填入：
+ *  1. 表头中嵌入套数，如「总需求数（5套）」「需求数量(3套)」→ 提取数字
+ *  2. 存在「套数 / 计划数量 / 生产套数」列 → 取首个数值
+ *  3. 其余返回 null
+ */
+export async function detectSetsFromCSV(
+  csvPath: string,
+  headers: Record<number, string>,
+): Promise<number | null> {
+  // 1) 表头嵌入套数
+  for (const name of Object.values(headers)) {
+    if (!name) continue;
+    const m = name.match(/(\d+)\s*套/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > 0) return n;
+    }
+  }
+  // 2) 套数列 -> 首个数值
+  const { readCSV } = await import("./csv");
+  if (!readCSV) return null;
+  const fs = await import("node:fs");
+  if (!fs.existsSync(csvPath)) return null;
+  const table = readCSV(csvPath);
+  const setsCol = findHeaderColumn(table.headerMap, [
+    "套数",
+    "计划数量",
+    "计划套数",
+    "生产套数",
+    "ProductionSets",
+    "Sets",
+  ]);
+  if (setsCol) {
+    const idx = table.headerMap[setsCol];
+    for (const row of table.rows) {
+      const v = parseLooseNumber(row[idx]);
+      if (v !== null && v > 0) return v;
+    }
+  }
+  return null;
+}

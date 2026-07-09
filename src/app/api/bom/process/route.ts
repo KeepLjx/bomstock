@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { loadJob, updateJob } from "@/lib/bom/storage";
+import { loadJob, updateJob, getResource, linkResourceToJob } from "@/lib/bom/storage";
 import { executeWorkflow, SIX_HEADER_NAMES } from "@/lib/bom/orchestrator";
 import { findHeaderColumn } from "@/lib/bom/parse";
 import {
@@ -91,7 +91,32 @@ export async function POST(req: NextRequest) {
         sets: o.sets && o.sets > 0 ? o.sets : 1,
       };
     });
-
+    // 库存表 / 工单表优先取自「持久资源」（每日更新）；若任务内也上传了同名文件则覆盖。
+    // 将持久资源链接进任务目录，并入 state.files 供编排器读取。
+    const mergedFiles = [...state.files];
+    const invResource = await getResource("inventory");
+    let inventoryRef: { storedName: string; originalName: string } | undefined;
+    if (invResource && invResource.meta?.csvName) {
+      const linked = linkResourceToJob(jobId, {
+        storedName: invResource.storedName,
+        originalName: invResource.originalName,
+        meta: invResource.meta,
+      });
+      mergedFiles.push(linked);
+      inventoryRef = { storedName: linked.storedName, originalName: linked.originalName };
+    }
+    const woResource = await getResource("work_order");
+    let workOrderRef: { storedName: string; originalName: string } | undefined;
+    if (woResource && woResource.meta?.csvName) {
+      const linked = linkResourceToJob(jobId, {
+        storedName: woResource.storedName,
+        originalName: woResource.originalName,
+        meta: woResource.meta,
+      });
+      mergedFiles.push(linked);
+      workOrderRef = { storedName: linked.storedName, originalName: linked.originalName };
+    }
+    const mergedState: typeof state = { ...state, files: mergedFiles };
     const config: WorkflowConfig = {
       targetBom: {
         storedName: body.targetStoredName,
@@ -99,32 +124,17 @@ export async function POST(req: NextRequest) {
         role: "target",
         sets: body.targetSets && body.targetSets > 0 ? body.targetSets : 1,
       },
-      inventory: body.inventoryStoredName
-        ? {
-            storedName: body.inventoryStoredName,
-            originalName:
-              state.files.find((f) => f.storedName === body.inventoryStoredName)
-                ?.originalName ?? body.inventoryStoredName,
-          }
-        : undefined,
+      inventory: inventoryRef,
       inventoryMapping: body.inventoryMapping,
       occupiedBoms,
-      workOrder: body.workOrderStoredName
-        ? {
-            storedName: body.workOrderStoredName,
-            originalName:
-              state.files.find((f) => f.storedName === body.workOrderStoredName)
-                ?.originalName ?? body.workOrderStoredName,
-          }
-        : undefined,
+      workOrder: workOrderRef,
       targetMapping: auto,
       runPhase2: body.runPhase2 !== false,
       runPhase3: !!body.runPhase3,
     };
-
     const { summary, outputPath, table } = await executeWorkflow({
       jobId,
-      state,
+      state: mergedState,
       config,
     });
 

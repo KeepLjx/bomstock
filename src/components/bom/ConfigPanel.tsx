@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
-import { type ParsedFileDTO } from "./types";
+import { type ParsedFileDTO, type ResourcesState} from "./types";
 import SheetPreviewModal from "./SheetPreviewModal";
 
 export interface ProcessPayload {
@@ -13,11 +13,19 @@ export interface ProcessPayload {
   workOrderStoredName?: string;
   runPhase2: boolean;
   runPhase3: boolean;
+  /** 回退恢复用：完整角色映射 */
+  __roles?: Record<string, string>;
+  /** 回退恢复用：完整套数映射（storedName -> 套数） */
+  setsMap?: Record<string, number>;
 }
 
 interface Props {
   jobId: string;
   files: ParsedFileDTO[];
+  /** 持久数据资源（库存表 / 工单表） */
+  resources?: ResourcesState | null;
+  /** 回退到本步骤时恢复的上次配置（需求 4） */
+  initialConfig?: ProcessPayload;
   onFileUpdated: (file: ParsedFileDTO) => void;
   onExecute: (payload: ProcessPayload) => Promise<void>;
   onBack: () => void;
@@ -100,6 +108,8 @@ function matchField(
 export default function ConfigPanel({
   jobId,
   files,
+  resources,
+  initialConfig,
   onFileUpdated,
   onExecute,
   onBack,
@@ -108,13 +118,24 @@ export default function ConfigPanel({
   const bomFiles = files.filter((f) => f.kind === "bom");
   const invFiles = files.filter((f) => f.kind === "inventory");
   const transferFiles = files.filter((f) => f.kind === "transfer");
-
+  // 回退时若提供了上次配置，则据此恢复角色
+  const prevRoles = initialConfig?.__roles ?? null;
   // 角色状态
   const [roles, setRoles] = useState<Record<string, string>>(() => {
     const m: Record<string, string> = {};
+    // 优先沿用已保存的角色
+    const saved = new Map<string, string>(
+      Object.entries(prevRoles ?? {}),
+    );
     let targetAssigned = false;
     for (const f of bomFiles) {
-      if (f.role === "target" && !targetAssigned) {
+      const s = saved.get(f.storedName);
+      if (s === "target" && !targetAssigned) {
+        m[f.storedName] = "target";
+        targetAssigned = true;
+      } else if (s === "occupied") {
+        m[f.storedName] = "occupied";
+      } else if (f.role === "target" && !targetAssigned) {
         m[f.storedName] = "target";
         targetAssigned = true;
       } else {
@@ -124,9 +145,20 @@ export default function ConfigPanel({
     if (!targetAssigned && bomFiles[0]) m[bomFiles[0].storedName] = "target";
     return m;
   });
+  // 套数：已占用 BOM 自动读取表中的套数（detectedSets），目标 BOM 默认 1
   const [sets, setSets] = useState<Record<string, number>>(() => {
     const m: Record<string, number> = {};
-    for (const f of bomFiles) m[f.storedName] = 1;
+    const savedSets = new Map<string, number>(
+      Object.entries(initialConfig?.setsMap ?? {}),
+    );
+    for (const f of bomFiles) {
+      if (savedSets.has(f.storedName)) {
+        m[f.storedName] = savedSets.get(f.storedName)!;
+      } else {
+        const auto = f.detectedSets && f.detectedSets > 0 ? f.detectedSets : 1;
+        m[f.storedName] = auto;
+      }
+    }
     return m;
   });
   const [inventoryStored, setInventoryStored] = useState<string>(
@@ -141,8 +173,9 @@ export default function ConfigPanel({
     [bomFiles, roles],
   );
   const targetFile = files.find((f) => f.storedName === targetStored);
-  const inventoryFile = files.find((f) => f.storedName === inventoryStored);
-  const workOrderFile = files.find((f) => f.storedName === workOrderStored);
+  // 库存表 / 工单表取自持久资源
+  const inventoryFile = resources?.inventory.file;
+  const workOrderFile = resources?.workOrder.file;
 
   const autoPick = (
     file: ParsedFileDTO | undefined,
@@ -165,31 +198,82 @@ export default function ConfigPanel({
     return out;
   };
 
-  const [targetMapping, setTargetMapping] = useState<
+    const [targetMapping, setTargetMapping] = useState<
     Record<string, string | undefined>
-  >(() => autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key)));
-
+  >(() => {
+    // 回退恢复：优先沿用上次的目标 BOM 列映射
+    if (initialConfig?.targetMapping) {
+      const names = new Set(targetFile?.headers.map((h) => h.name) ?? []);
+      const restored: Record<string, string | undefined> = {};
+      for (const [k, v] of Object.entries(initialConfig.targetMapping)) {
+        restored[k] = v && names.has(v) ? v : undefined;
+      }
+      // 补全缺失字段
+      const picked = autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key));
+      for (const key of MAPPING_FIELDS.map((m) => m.key)) {
+        if (!restored[key] && picked[key]) restored[key] = picked[key];
+      }
+      return restored;
+    }
+    return autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key));
+  });
   const [invMapping, setInvMapping] = useState<Record<string, string | undefined>>(
     () => {
+      // 回退恢复：优先沿用上次的库存表列映射
+      if (initialConfig?.inventoryMapping) {
+        const inv = files.find((f) => f.storedName === inventoryStored);
+        const names = new Set(inv?.headers.map((h) => h.name) ?? []);
+        const restored: Record<string, string | undefined> = {
+          codeColumn:
+            initialConfig.inventoryMapping.codeColumn &&
+            names.has(initialConfig.inventoryMapping.codeColumn)
+              ? initialConfig.inventoryMapping.codeColumn
+              : undefined,
+          qtyColumn:
+            initialConfig.inventoryMapping.qtyColumn &&
+            names.has(initialConfig.inventoryMapping.qtyColumn)
+              ? initialConfig.inventoryMapping.qtyColumn
+              : undefined,
+        };
+        const picked = autoPick(inv, INV_FIELDS.map((m) => m.key));
+        for (const key of INV_FIELDS.map((m) => m.key)) {
+          if (!restored[key] && picked[key]) restored[key] = picked[key];
+        }
+        return restored;
+      }
       const inv = files.find((f) => f.storedName === inventoryStored);
       return autoPick(inv, INV_FIELDS.map((m) => m.key));
     },
   );
-
-  const [runPhase2, setRunPhase2] = useState(true);
+  const [runPhase2, setRunPhase2] = useState(initialConfig?.runPhase2 ?? true);
   const [runPhase3, setRunPhase3] = useState(
-    bomFiles.some((f) => roles[f.storedName] === "occupied"),
+    initialConfig?.runPhase3 ?? bomFiles.some((f) => roles[f.storedName] === "occupied"),
   );
   const [sheetUpdating, setSheetUpdating] = useState<Record<string, boolean>>({});
-  // 预览弹窗目标文件
+  // 预览弹窗目标文件（任务内 BOM）
   const [previewFile, setPreviewFile] = useState<ParsedFileDTO | null>(null);
-
+  // 预览持久资源（库存表 / 工单表）
+  const [previewKind, setPreviewKind] = useState<"inventory" | "work_order" | null>(null);
+  // 切换目标 BOM 时：保留已选列，仅补全空缺（不覆盖用户已确认的映射）
   useEffect(() => {
-    setTargetMapping(autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key)));
+    const picked = autoPick(targetFile, MAPPING_FIELDS.map((m) => m.key));
+    setTargetMapping((prev) => {
+      const next = { ...prev };
+      for (const key of MAPPING_FIELDS.map((m) => m.key)) {
+        if (!next[key] && picked[key]) next[key] = picked[key];
+      }
+      return next;
+    });
   }, [targetFile?.storedName, targetFile?.mainSheet]);
-
   useEffect(() => {
-    setInvMapping(autoPick(inventoryFile, INV_FIELDS.map((m) => m.key)));
+    setInvMapping((prev) => {
+      const picked = autoPick(inventoryFile, INV_FIELDS.map((m) => m.key));
+      const next = { ...prev };
+      for (const key of INV_FIELDS.map((m) => m.key)) {
+        if (!next[key] && picked[key]) next[key] = picked[key];
+      }
+      return next;
+    });
   }, [inventoryFile?.storedName, inventoryFile?.mainSheet]);
 
   const ensureMapping = () => {
@@ -210,14 +294,16 @@ export default function ConfigPanel({
 
   // 目标 BOM 缺少「一博物料编码」时禁止执行
   const targetMissingYibo = !!targetFile && !targetFile.hasYiboCode;
+  // 库存表来自持久资源
+  const inventoryReady = !!resources?.inventory.exists;
+  const inventoryMappingReady = !!invMapping.codeColumn && !!invMapping.qtyColumn;
   const canExecute =
     !!targetStored &&
     !targetMissingYibo &&
     !!targetMapping.quantityColumn &&
     !!targetMapping.usageColumn &&
     !!targetMapping.bomCodeColumn &&
-    (!invFiles.length ||
-      (!!inventoryStored && !!invMapping.codeColumn && !!invMapping.qtyColumn));
+    (!inventoryReady || inventoryMappingReady);
 
   const handleSheetChange = async (storedName: string, sheetName: string) => {
     if (!sheetName) return;
@@ -261,6 +347,8 @@ export default function ConfigPanel({
       workOrderStoredName: workOrderStored || undefined,
       runPhase2,
       runPhase3,
+      __roles: roles,
+      setsMap: sets,
     });
   };
 
@@ -291,51 +379,35 @@ export default function ConfigPanel({
         </div>
       )}
 
-      {/* 库存表 */}
-      {invFiles.length > 0 && (
-        <Section title="库存表" desc="选择用于匹配的物料库存查询表">
-          <div className="flex flex-wrap gap-2">
-            {invFiles.map((f) => (
-              <button
-                key={f.storedName}
-                onClick={() => setInventoryStored(f.storedName)}
-                className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                  inventoryStored === f.storedName
-                    ? "border-[#1a73e8] bg-[#e8f0fe] text-[#174ea6]"
-                    : "border-[#dadce0] bg-white text-[#5f6368] hover:bg-[#f1f3f4]"
-                }`}
-              >
-                📦 {f.originalName}
-                <span className="ml-2 text-xs opacity-60">{f.rowCount} 行</span>
-              </button>
-            ))}
-          </div>
-{inventoryFile && (
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,280px)_1fr]">
-              <SheetSelect
-                label="库存表 Sheet"
-                value={inventoryFile.mainSheet}
-                sheets={inventoryFile.sheets}
-                disabled={processing || !!sheetUpdating[inventoryFile.storedName]}
-                onChange={(sheetName) =>
-                  handleSheetChange(inventoryFile.storedName, sheetName)
-                }
-              />
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-[#5f6368]">
-                  当前计算使用所选库存 sheet 的物料编码与总数量数据。
-                  当前计算使用所选库存 sheet 的物料编码与总数量数据。
-                </p>
-                <button
-                  onClick={() => setPreviewFile(inventoryFile)}
-                  className="rounded-full border border-[#dadce0] px-3 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#e8f0fe]"
-                >
-                  👁 预览
-                </button>
+{/* 库存表（持久资源，每日更新） */}
+      <Section
+        title="库存表"
+        desc="用于匹配的物料库存查询表（数据资源，每日更新）"
+      >
+        {inventoryFile ? (
+          <>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[#f8f9fa] px-4 py-3">
+              <div className="flex items-center gap-2">
+                <span className="text-base">📦</span>
+                <div>
+                  <div className="text-sm font-medium text-[#202124]">
+                    {inventoryFile.originalName}
+                  </div>
+                  <div className="text-xs text-[#9aa0a6]">
+                    {inventoryFile.mainSheet} · {inventoryFile.rowCount} 行
+                    {resources?.inventory.updatedToday
+                      ? " · ✓ 今日已更新"
+                      : " · ⚠ 需更新"}
+                  </div>
+                </div>
               </div>
+              <button
+                onClick={() => setPreviewKind("inventory")}
+                className="rounded-full border border-[#dadce0] px-3 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#e8f0fe]"
+              >
+                👁 预览
+              </button>
             </div>
-          )}
-          {inventoryStored && (
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
               {INV_FIELDS.map((field) => (
                 <ColumnSelect
@@ -343,80 +415,61 @@ export default function ConfigPanel({
                   label={field.label}
                   required={field.required}
                   value={invMapping[field.key]}
-                  options={inventoryFile?.headers ?? []}
+                  options={inventoryFile.headers}
                   onChange={(v) =>
                     setInvMapping((p) => ({ ...p, [field.key]: v }))
                   }
                 />
               ))}
             </div>
-          )}
-        </Section>
-      )}
+          </>
+        ) : (
+          <p className="text-sm text-[#d93025]">
+            尚未上传库存表，请返回「上传」步骤更新数据资源。
+          </p>
+        )}
+      </Section>
 
-      {/* 工单调拨齐套报表（扣减特殊判断） */}
-      {transferFiles.length > 0 && (
-        <Section
-          title="工单调拨齐套报表（可选）"
-          desc="用于判断已占用 BOM 的生产是否已在工单中确认（确认则不扣减其用量）"
-        >
-          <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => setWorkOrderStored("")}
-              className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                !workOrderStored
-                  ? "border-[#1a73e8] bg-[#e8f0fe] text-[#174ea6]"
-                  : "border-[#dadce0] bg-white text-[#5f6368] hover:bg-[#f1f3f4]"
-              }`}
-            >
-              不使用
-            </button>
-            {transferFiles.map((f) => (
-              <button
-                key={f.storedName}
-                onClick={() => setWorkOrderStored(f.storedName)}
-                className={`rounded-full border px-3 py-1.5 text-sm transition ${
-                  workOrderStored === f.storedName
-                    ? "border-[#1a73e8] bg-[#e8f0fe] text-[#174ea6]"
-                    : "border-[#dadce0] bg-white text-[#5f6368] hover:bg-[#f1f3f4]"
-                }`}
-              >
-                📋 {f.originalName}
-              </button>
-            ))}
-          </div>
-          {workOrderFile && (
-            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,280px)_1fr]">
-              <SheetSelect
-                label="工单报表 Sheet"
-                value={workOrderFile.mainSheet}
-                sheets={workOrderFile.sheets}
-                disabled={processing || !!sheetUpdating[workOrderFile.storedName]}
-                onChange={(sheetName) =>
-                  handleSheetChange(workOrderFile.storedName, sheetName)
-                }
-              />
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-xs text-[#5f6368]">
-                  切换后，工单确认判断会基于当前 sheet 重新计算是否跳过扣减。
-                </p>
-                <button
-                  onClick={() => setPreviewFile(workOrderFile)}
-                  className="rounded-full border border-[#dadce0] px-3 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#e8f0fe]"
-                >
-                  👁 预览
-                </button>
+ {/* 工单调拨齐套报表（持久资源，每日更新） */}
+      <Section
+        title="工单调拨齐套报表"
+        desc="用于判断已占用 BOM 的生产是否已在工单中确认（数据资源，每日更新）"
+      >
+        {workOrderFile ? (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-[#f8f9fa] px-4 py-3">
+            <div className="flex items-center gap-2">
+              <span className="text-base">📋</span>
+              <div>
+                <div className="text-sm font-medium text-[#202124]">
+                  {workOrderFile.originalName}
+                </div>
+                <div className="text-xs text-[#9aa0a6]">
+                  {workOrderFile.mainSheet} · {workOrderFile.rowCount} 行
+                  {resources?.workOrder.updatedToday
+                    ? " · ✓ 今日已更新"
+                    : " · ⚠ 需更新"}
+                </div>
               </div>
             </div>
-          )}
-          {workOrderStored && occupied.length > 0 && (
-            <p className="mt-2 text-xs text-[#5f6368]">
-              ✓ 将检查工单中「成品名称」是否包含各已占用 BOM 的产品名（如
-              S801CPR、S801XHC32PA），且「计划数量」与套数一致时跳过该 BOM 的扣减。
-            </p>
-          )}
-        </Section>
-      )}
+            <button
+              onClick={() => setPreviewKind("work_order")}
+              className="rounded-full border border-[#dadce0] px-3 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#e8f0fe]"
+            >
+              👁 预览
+            </button>
+          </div>
+        ) : (
+          <p className="text-sm text-[#d93025]">
+            尚未上传工单报表，请返回「上传」步骤更新数据资源。
+          </p>
+        )}
+        {workOrderFile && occupied.length > 0 && (
+          <p className="mt-2 text-xs text-[#5f6368]">
+            ✓ 将检查工单中「成品名称」是否包含各已占用 BOM 的产品名（如
+            S801CPR、S801XHC32PA），且「计划数量」与套数一致时跳过该 BOM 的扣减。
+          </p>
+        )}
+      </Section>
 
       {/* BOM 角色与套数 */}
       <Section title="BOM 角色与生产套数" desc="为每个 BOM 文件指派角色并填写生产套数">
@@ -602,12 +655,23 @@ export default function ConfigPanel({
         </p>
       )}
       {/* 预览弹窗 */}
-      {previewFile && (
+       {previewFile && (
         <SheetPreviewModal
           jobId={jobId}
           storedName={previewFile.storedName}
           originalName={previewFile.originalName}
           onClose={() => setPreviewFile(null)}
+        />
+      )}
+      {previewKind && (
+        <SheetPreviewModal
+          kind={previewKind}
+          originalName={
+            previewKind === "inventory"
+              ? resources?.inventory.file?.originalName ?? "库存表"
+              : resources?.workOrder.file?.originalName ?? "工单报表"
+          }
+          onClose={() => setPreviewKind(null)}
         />
       )}
     </div>

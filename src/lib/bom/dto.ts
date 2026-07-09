@@ -1,7 +1,7 @@
 import type { ParsedFile } from "./types";
 /**
  * 解析文件 -> 前端可消费的 DTO
- * 统一多个 API 路由（upload / delete / sheet）的输出结构
+ * 统一多个 API 路由（upload / delete / sheet / resources）的输出结构
  */
 export interface ParsedFileDTO {
   storedName: string;
@@ -16,6 +16,8 @@ export interface ParsedFileDTO {
   removedColumnCount: number;
   ignoredChangeLog: string[];
   headers: { col: number; name: string }[];
+  /** 自动检测到的生产套数（已占用 BOM 默认值） */
+  detectedSets?: number | null;
 }
 export function parsedFileToDTO(p: ParsedFile): ParsedFileDTO {
   return {
@@ -33,5 +35,6 @@ export function parsedFileToDTO(p: ParsedFile): ParsedFileDTO {
     headers: Object.entries(p.headers)
       .map(([col, name]) => ({ col: Number(col), name }))
       .sort((a, b) => a.col - b.col),
+    detectedSets: p.detectedSets ?? null,
   };
 }

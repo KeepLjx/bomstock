@@ -1,13 +1,17 @@
 "use client";
 import { useCallback, useRef, useState } from "react";
-import type { ParsedFileDTO, UploadResponse } from "./types";
+import type { ParsedFileDTO, UploadResponse, ResourcesState } from "./types";
 import { KIND_LABELS } from "./types";
+import ResourceCards from "./ResourceCards";
 interface Props {
   onConfirmed: (res: UploadResponse) => void;
   onError: (msg: string) => void;
   /** 退回此步骤时恢复的已确认任务（保留已上传文件列表） */
   initialJobId?: string | null;
   initialFiles?: ParsedFileDTO[];
+  /** 持久数据资源状态（库存表 / 工单表） */
+  resources?: ResourcesState | null;
+  onResourcesUpdated?: () => Promise<void> | void;
 }
 const KIND_ICON: Record<ParsedFileDTO["kind"], string> = {
   bom: "🧾",
@@ -20,6 +24,8 @@ export default function UploadZone({
   onError,
   initialJobId,
   initialFiles,
+  resources,
+  onResourcesUpdated,
 }: Props) {
   const [jobId, setJobId] = useState<string | null>(initialJobId ?? null);
   const [files, setFiles] = useState<ParsedFileDTO[]>(initialFiles ?? []);
@@ -29,6 +35,7 @@ export default function UploadZone({
   const addInputRef = useRef<HTMLInputElement>(null);
   const replaceInputRef = useRef<HTMLInputElement>(null);
   const replaceTarget = useRef<string | null>(null);
+  const refreshNoop = async () => {};
   const bomFiles = files.filter((f) => f.kind === "bom");
   const missingYibo = bomFiles.filter((f) => !f.hasYiboCode);
   const yiboWarning =
@@ -62,13 +69,17 @@ export default function UploadZone({
         }
         setJobId(data.jobId);
         setFiles(data.files as ParsedFileDTO[]);
+        // 若本次上传更新了库存/工单资源，刷新前端资源状态
+        if (data.updatedResources?.length && onResourcesUpdated) {
+          await onResourcesUpdated();
+        }
       } catch (e) {
         onError(`上传失败：${(e as Error).message}`);
       } finally {
         setUploading(false);
       }
     },
-    [jobId, onError],
+    [jobId, onError, onResourcesUpdated],
   );
   const removeFile = useCallback(
     async (storedName: string) => {
@@ -122,6 +133,27 @@ export default function UploadZone({
   };
   return (
     <div className="space-y-6">
+      {/* 持久数据资源：库存表 / 工单表（每日更新） */}
+      {resources && (
+        <div className="rounded-xl border border-[#dadce0] bg-[#f8f9fa] p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-[#202124]">
+              📊 数据资源（库存表 / 工单表，每日更新）
+            </h3>
+            <span className="text-xs text-[#5f6368]">
+              匹配时自动引用最新库存与工单
+            </span>
+          </div>
+          <ResourceCards resources={resources} onUpdated={onResourcesUpdated ?? refreshNoop} />
+        </div>
+      )}
+      {/* BOM 文件上传区 */}
+      <div className="mb-1 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-[#202124]">🧾 上传 BOM 文件</h3>
+        <span className="text-xs text-[#5f6368]">
+          （库存表 / 工单表请在上方更新，此处只需上传 BOM）
+        </span>
+      </div>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-5">
         {/* 左：上传区 */}
         <div className="flex lg:col-span-3">

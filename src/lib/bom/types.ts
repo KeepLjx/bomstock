@@ -34,6 +34,8 @@ export interface ParsedFile {
   headerMap: Record<string, number>;
   /** 是否含一博物料编码列 */
   hasYiboCode: boolean;
+  /** 自动检测到的生产套数（用于已占用 BOM 默认值） */
+  detectedSets?: number | null;
   /** 清洗后生成的 CSV 文件名（位于任务目录内），后续匹配基于此 */
   csvName?: string;
   /** 被剔除的无意义列数 */

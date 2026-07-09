@@ -14,12 +14,32 @@ export interface ParsedFileDTO {
   /** 被忽略的 change log 工作表名 */
   ignoredChangeLog: string[];
   headers: { col: number; name: string }[];
+  /** 自动检测到的生产套数（已占用 BOM 默认值） */
+  detectedSets?: number | null;
 }
 
 export interface UploadResponse {
   jobId: string;
   files: ParsedFileDTO[];
   yiboWarning: string | null;
+  /** 本次上传中被更新为持久资源的库存/工单表 */
+  updatedResources?: {
+    kind: "inventory" | "work_order";
+    file: ParsedFileDTO;
+  }[];
+}
+/** 持久资源（库存表 / 工单表）状态 */
+export interface ResourceStatus {
+  id: "inventory" | "work_order";
+  exists: boolean;
+  updatedToday: boolean;
+  updatedAt?: string;
+  file?: ParsedFileDTO;
+}
+
+export interface ResourcesState {
+  inventory: ResourceStatus;
+  workOrder: ResourceStatus;
 }
 
 export interface SupplyCounts {

@@ -2,8 +2,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PreviewResponse } from "./types";
 interface Props {
-  jobId: string;
-  storedName: string;
+  jobId?: string;
+  storedName?: string;
+  /** 预览持久资源：inventory | work_order */
+  kind?: "inventory" | "work_order";
   originalName: string;
   onClose: () => void;
 }
@@ -18,6 +20,7 @@ const PREVIEW_LIMIT = 100;
 export default function SheetPreviewModal({
   jobId,
   storedName,
+  kind,
   originalName,
   onClose,
 }: Props) {
@@ -35,7 +38,11 @@ export default function SheetPreviewModal({
       const res = await fetch("/api/bom/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ jobId, storedName, limit: PREVIEW_LIMIT }),
+        body: JSON.stringify(
+          kind
+            ? { kind, limit: PREVIEW_LIMIT }
+            : { jobId: jobId ?? "", storedName: storedName ?? "", limit: PREVIEW_LIMIT },
+        ),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "获取预览失败");
@@ -51,7 +58,7 @@ export default function SheetPreviewModal({
     } finally {
       setLoading(false);
     }
-  }, [jobId, storedName]);
+  }, [jobId, storedName, kind]);
   useEffect(() => {
     fetchData();
   }, [fetchData]);
