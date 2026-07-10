@@ -184,12 +184,7 @@ export function findHeaderColumn(
   headerMap: Record<string, number>,
   aliases: string[],
 ): string | undefined {
-  // 先精确匹配
-  for (const alias of aliases) {
-    const a = normalizeHeader(alias);
-    if (a && headerMap[a] !== undefined) return a;
-  }
-  // 再用 matchAlias
+  // 包含匹配 列 需求数量(5套)
   for (const header of Object.keys(headerMap)) {
     if (matchAlias(header, aliases)) return header;
   }

@@ -40,11 +40,11 @@ export const PART_STATUS_ALIASES = [
 
 /** 单机用量 */
 export const USAGE_ALIASES = [
+  "Quantity",
   "单机用量",
   "单板用量",
   "单台用量",
   "用量",
-  "Quantity",
   "Qty",
   "USAGE",
 ];
@@ -79,8 +79,8 @@ export const QUANTITY_ALIASES = [
  * 匹配 总需求数（N套）/ 需求数量(N套) / 总需求数 等变体
  */
 export const DEMAND_ALIASES = [
-  "总需求数",
   "需求数量",
+  "总需求数",
   "需求数",
   "总需求",
 ];
