@@ -109,9 +109,9 @@ export default function UploadZone({
     replaceTarget.current = storedName;
     replaceInputRef.current?.click();
   };
-  const onReplacePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+ const onReplacePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    e.target.value = "";
+    e.target.value = ""; // 重置，便于下次选择同一文件
     const target = replaceTarget.current;
     replaceTarget.current = null;
     if (!file || !target) return;
@@ -119,9 +119,29 @@ export default function UploadZone({
       onError("请选择 Excel 文件（.xlsx / .xlsm）");
       return;
     }
-    // 先删除旧文件，再上传新文件（保持同一任务）
-    await removeFile(target);
-    await upload([file]);
+    if (!jobId) {
+      onError("任务不存在，请重新上传");
+      return;
+    }
+    setUploading(true);
+    try {
+      // 单次调用后端 replace：原子替换并保持原位置
+      const fd = new FormData();
+      fd.append("jobId", jobId);
+      fd.append("replaceStoredName", target);
+      fd.append("files", file);
+      const res = await fetch("/api/bom/replace", { method: "POST", body: fd });
+      const data = await res.json();
+      if (!res.ok) {
+        onError(data.error || "替换失败");
+        return;
+      }
+      setFiles(data.files as ParsedFileDTO[]);
+    } catch (err) {
+      onError(`替换失败：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setUploading(false);
+    }
   };
   const confirm = () => {
     if (!canConfirm || !jobId) return;
@@ -133,6 +153,14 @@ export default function UploadZone({
   };
   return (
     <div className="space-y-6">
+      {/* 替换用隐藏 input —— 放在根层级，避免触发上传区的 onClick（双弹窗根因） */}
+      <input
+        ref={replaceInputRef}
+        type="file"
+        accept=".xlsx,.xlsm,.xls"
+        className="hidden"
+        onChange={onReplacePicked}
+      />
       {/* 持久数据资源：库存表 / 工单表（每日更新） */}
       {resources && (
         <div className="rounded-xl border border-[#dadce0] bg-[#f8f9fa] p-4">
@@ -175,7 +203,7 @@ export default function UploadZone({
                 : "border-[#dadce0] bg-[#f8f9fa] hover:border-[#1a73e8] hover:bg-[#f1f3f4]"
             }`}
           >
-            <input
+           <input
               ref={addInputRef}
               type="file"
               multiple
@@ -185,13 +213,6 @@ export default function UploadZone({
                 if (e.target.files) upload(e.target.files);
                 e.target.value = "";
               }}
-            />
-            <input
-              ref={replaceInputRef}
-              type="file"
-              accept=".xlsx,.xlsm,.xls"
-              className="hidden"
-              onChange={onReplacePicked}
             />
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-[#e8f0fe] text-[#1a73e8]">
               <svg

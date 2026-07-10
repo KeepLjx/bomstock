@@ -689,7 +689,7 @@ function Section({
 }) {
   return (
     <div className="rounded-xl border border-[#dadce0] bg-white p-5">
-      <h3 className="text-sm font-medium text-[#202124]">{title}</h3>
+      <h3 className="text-base font-bold text-[#202124]">{title}</h3>
       {desc && <p className="mt-0.5 text-xs text-[#5f6368]">{desc}</p>}
       <div className="mt-4">{children}</div>
     </div>
@@ -713,7 +713,7 @@ function ColumnSelect({
 }) {
   return (
     <label className="block">
-      <span className="text-sm font-medium text-[#3c4043]">
+      <span className="text-base font-bold text-[#202124]">
         {label}
         {required && <span className="ml-1 text-[#d93025]">*</span>}
       </span>
