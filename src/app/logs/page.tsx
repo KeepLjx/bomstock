@@ -1,13 +1,13 @@
 import Nav from "@/components/app/Nav";
-import History from "@/components/app/History";
+import LogsView from "@/components/app/LogsView";
 
 export const dynamic = "force-dynamic";
 
-export default function HistoryPage() {
+export default function LogsPage() {
   return (
     <main className="min-h-screen bg-white">
       <Nav />
-      <History />
+      <LogsView />
     </main>
   );
 }

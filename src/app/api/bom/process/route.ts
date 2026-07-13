@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { loadJob, updateJob, getResource, linkResourceToJob } from "@/lib/bom/storage";
+import { db } from "@/db";
+import { bomJobs } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import { executeWorkflow, SIX_HEADER_NAMES } from "@/lib/bom/orchestrator";
 import { findHeaderColumn } from "@/lib/bom/parse";
 import {
@@ -144,6 +147,11 @@ export async function POST(req: NextRequest) {
       summary,
       outputFileName: summary.outputFileName,
     });
+    // 持久化匹配后的结果表格（含插入的分析列与颜色标记），供历史记录查看
+    await db
+      .update(bomJobs)
+      .set({ result: table as never, updatedAt: new Date() })
+      .where(eq(bomJobs.id, jobId));
 
     // outputPath 仅供服务端使用，客户端通过编辑后表格导出
     void outputPath;

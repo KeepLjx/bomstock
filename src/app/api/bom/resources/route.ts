@@ -9,6 +9,17 @@ import {
 import { cleanExcelToCSV, detectFileKind } from "@/lib/bom/parse";
 import { detectSetsFromCSV } from "@/lib/bom/parse";
 import { parsedFileToDTO } from "@/lib/bom/dto";
+import {
+  extractInventoryRows,
+} from "@/lib/inventory";
+import {
+  persistInventorySnapshots,
+  clearInventorySnapshots,
+  setCurrentInventory,
+} from "@/lib/bom/store";
+import { db } from "@/db";
+import { bomResources } from "@/db/schema";
+import { eq } from "drizzle-orm";
 import type { ParsedFile } from "@/lib/bom/types";
 import path from "node:path";
 import fs from "node:fs";
@@ -140,6 +151,25 @@ export async function POST(req: NextRequest) {
     }
     const { meta } = await parseResource(kind, file);
     await upsertResource(id, KIND_OF[kind], meta.storedName, meta.originalName, meta);
+
+    // 库存资源：生成持久标准化快照 + 设为 current（与仪表盘上传口径一致）
+    let snapshotRows = 0;
+    if (kind === "inventory" && meta.csvName) {
+      await db
+        .update(bomResources)
+        .set({
+          resourceType: "inventory",
+          isCurrent: true,
+          effectiveDate: new Date().toISOString().slice(0, 10),
+          updatedAt: new Date(),
+        })
+        .where(eq(bomResources.id, id));
+      await clearInventorySnapshots(id);
+      const rows = extractInventoryRows(resourceFilePath(meta.csvName));
+      await persistInventorySnapshots(id, rows, new Date().toISOString().slice(0, 10));
+      snapshotRows = rows.length;
+    }
+
     const updated = await getResource(id);
     return NextResponse.json({
       id,
@@ -148,6 +178,7 @@ export async function POST(req: NextRequest) {
       updatedToday: updated ? isToday(updated.updatedAt) : true,
       updatedAt: updated?.updatedAt.toISOString(),
       file: parsedFileToDTO(meta),
+      snapshotRows,
     });
   } catch (e) {
     return NextResponse.json(

@@ -8,6 +8,7 @@ import {
   updateJob,
   loadJob,
   jobDir,
+  filePathOf,
   saveResourceUpload,
   upsertResource,
   resourceFilePath,
@@ -19,6 +20,21 @@ import {
   detectBomRole,
   detectSetsFromCSV,
 } from "@/lib/bom/parse";
+import { requireUser, UnauthorizedError } from "@/lib/auth";
+import { writeAudit } from "@/lib/audit";
+import {
+  fileHash,
+  deriveBizKey,
+  findJobByHash,
+  findActiveJobByBizKey,
+  markReplaced,
+  persistJobDemands,
+} from "@/lib/bom/store";
+import { extractDemandRows } from "@/lib/inventory";
+import { db } from "@/db";
+import { bomJobs } from "@/db/schema";
+import { eq } from "drizzle-orm";
+import type { AuthUser } from "@/lib/auth";
 import type { ParsedFile, JobState } from "@/lib/bom/types";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -103,9 +119,183 @@ async function persistResource(
   await upsertResource(id, id, storedName, f.name, meta);
   return meta;
 }
+/**
+ * 新系统：上传单个 occupied / target BOM。
+ * - occupied：计算 file_hash + biz_key，做重复判定与版本替换，生成 bom_demands，默认 active 参与预扣减。
+ * - target：仅登记作业，供后续标色（不扣减库存）。
+ */
+async function uploadSingleBom(
+  _req: NextRequest,
+  form: FormData,
+  jobType: "occupied_bom" | "target_bom",
+  user: AuthUser,
+) {
+  const file = form.getAll("files").find((f): f is File => f instanceof File);
+  if (!file) {
+    return NextResponse.json({ error: "请上传一个 BOM 文件" }, { status: 400 });
+  }
+  if (file.size > MAX_SIZE) {
+    return NextResponse.json(
+      { error: `文件 ${file.name} 超过 ${MAX_SIZE / 1024 / 1024}MB 限制` },
+      { status: 400 },
+    );
+  }
+  if (!/\.(xlsx|xlsm|xls)$/i.test(file.name.toLowerCase())) {
+    return NextResponse.json(
+      { error: `文件 ${file.name} 不是 Excel 文件` },
+      { status: 400 },
+    );
+  }
+
+  const jobId = generateJobId();
+  const dir = jobDir(jobId);
+  const meta = await parseBom(jobId, dir, file);
+  const hash = fileHash(Buffer.from(await file.arrayBuffer()));
+
+  if (jobType === "target_bom") {
+    const state: JobState = {
+      id: jobId,
+      status: "parsed",
+      files: [meta],
+      createdAt: Date.now(),
+    };
+    await createJob(jobId, file.name, state);
+    await db
+      .update(bomJobs)
+      .set({
+        jobType: "target_bom",
+        uploadedBy: user.id,
+        fileHash: hash,
+        updatedAt: new Date(),
+      })
+      .where(eq(bomJobs.id, jobId));
+    await writeAudit({
+      userId: user.id,
+      action: "upload_target_bom",
+      targetType: "job",
+      targetId: jobId,
+      detail: { originalName: file.name, hash },
+    });
+    return NextResponse.json({
+      jobId,
+      jobType: "target_bom",
+      duplicate: false,
+      files: [parsedFileToDTO(meta)],
+    });
+  }
+
+  // ---- occupied_bom ----
+  const setsRaw = Number(form.get("sets"));
+  const sets =
+    Number.isFinite(setsRaw) && setsRaw > 0
+      ? Math.floor(setsRaw)
+      : meta.detectedSets && meta.detectedSets > 0
+        ? meta.detectedSets
+        : 1;
+  const bizKey = deriveBizKey(file.name);
+
+  // 文件级重复：内容完全一致 -> 直接判定重复
+  const dupJob = await findJobByHash(hash);
+  if (dupJob) {
+    await writeAudit({
+      userId: user.id,
+      action: "upload_occupied_bom",
+      targetType: "job",
+      targetId: dupJob.id,
+      detail: { originalName: file.name, hash, duplicate: true },
+    });
+    return NextResponse.json({
+      jobId: dupJob.id,
+      jobType: "occupied_bom",
+      duplicate: true,
+      duplicateOfJobId: dupJob.id,
+      message: `文件内容与已上传的「${dupJob.name ?? ""}」完全一致，已判定为重复，未纳入预扣减。`,
+      files: [parsedFileToDTO(meta)],
+    });
+  }
+
+  // 业务级重复：同 biz_key 的旧 active 版本 -> 标记 replaced，新版本 active
+  let replacedExistingId: string | null = null;
+  if (bizKey) {
+    const existing = await findActiveJobByBizKey(bizKey, jobId);
+    if (existing) {
+      await markReplaced(existing.id, jobId);
+      replacedExistingId = existing.id;
+    }
+  }
+
+  // 创建作业 + 生成需求明细
+  const state: JobState = {
+    id: jobId,
+    status: "parsed",
+    files: [meta],
+    createdAt: Date.now(),
+  };
+  await createJob(jobId, file.name, state);
+  await db
+    .update(bomJobs)
+    .set({
+      jobType: "occupied_bom",
+      uploadedBy: user.id,
+      fileHash: hash,
+      bizKey,
+      sets,
+      deductionStatus: "active",
+      reservedAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .where(eq(bomJobs.id, jobId));
+
+  let demandCount = 0;
+  if (meta.csvName) {
+    const demandRows = extractDemandRows(filePathOf(jobId, meta.csvName), sets);
+    demandCount = await persistJobDemands(jobId, demandRows, meta.mainSheet);
+  }
+
+  await writeAudit({
+    userId: user.id,
+    action: "upload_occupied_bom",
+    targetType: "job",
+    targetId: jobId,
+    detail: {
+      originalName: file.name,
+      hash,
+      bizKey,
+      sets,
+      demands: demandCount,
+      replacedExistingId,
+    },
+  });
+
+  return NextResponse.json({
+    jobId,
+    jobType: "occupied_bom",
+    duplicate: false,
+    replacedExistingId,
+    bizKey,
+    sets,
+    demandCount,
+    files: [parsedFileToDTO(meta)],
+  });
+}
+
 export async function POST(req: NextRequest) {
+  let user: Awaited<ReturnType<typeof requireUser>> | null = null;
+  try {
+    user = await requireUser(req);
+  } catch (e) {
+    if (e instanceof UnauthorizedError) {
+      return NextResponse.json({ error: e.message }, { status: 401 });
+    }
+    throw e;
+  }
   try {
     const form = await req.formData();
+    const jobType = String(form.get("job_type") ?? "").trim();
+    // ---- 新系统：按 job_type 上传单个 occupied/target BOM（含去重） ----
+    if (jobType === "occupied_bom" || jobType === "target_bom") {
+      return await uploadSingleBom(req, form, jobType, user);
+    }
     const files = form.getAll("files").filter((f): f is File => f instanceof File);
     const rawJobId = form.get("jobId");
     const appendJobId =

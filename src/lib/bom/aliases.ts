@@ -105,6 +105,28 @@ export const INVENTORY_CODE_ALIASES = [
   "Code",
 ];
 
+/** 物料名称（库存表 / BOM 通用） */
+export const MATERIAL_NAME_ALIASES = [
+  "物料名称",
+  "品名",
+  "名称",
+  "物料描述",
+  "存货名称",
+  "MaterialName",
+  "Description",
+  "Name",
+];
+
+/** 规格型号 */
+export const SPEC_ALIASES = [
+  "规格",
+  "规格型号",
+  "型号",
+  "规格描述",
+  "Spec",
+  "Specification",
+];
+
 /** 库存表总数量 */
 export const INVENTORY_QTY_ALIASES = [
   "总数量",
