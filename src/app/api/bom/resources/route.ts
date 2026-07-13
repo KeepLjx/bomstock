@@ -155,6 +155,9 @@ export async function POST(req: NextRequest) {
     // 库存资源：生成持久标准化快照 + 设为 current（与仪表盘上传口径一致）
     let snapshotRows = 0;
     if (kind === "inventory" && meta.csvName) {
+      // 必须先清除旧的 current，再设置 resourceType/isCurrent，否则会违反
+      // bom_resources_current_inventory_idx 部分唯一索引
+      await setCurrentInventory(id);
       await db
         .update(bomResources)
         .set({

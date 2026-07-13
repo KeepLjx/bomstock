@@ -81,6 +81,14 @@ export async function POST(req: NextRequest) {
 
     // 资源登记（覆盖同 id）
     await upsertResource(resourceId, "inventory", meta.storedName, file.name, meta);
+
+    // 生成库存快照明细
+    const rows = extractInventoryRows(resourceFilePath(meta.csvName!));
+
+    // 设为 current（其余 inventory 置为非 current）
+    // 必须先清除旧的 current，再设置 resourceType/isCurrent，否则会违反
+    // bom_resources_current_inventory_idx 部分唯一索引
+    await setCurrentInventory(resourceId);
     await db
       .update(bomResources)
       .set({
@@ -92,12 +100,6 @@ export async function POST(req: NextRequest) {
         updatedAt: new Date(),
       })
       .where(eq(bomResources.id, resourceId));
-
-    // 生成库存快照明细
-    const rows = extractInventoryRows(resourceFilePath(meta.csvName!));
-
-    // 设为 current（其余 inventory 置为非 current）
-    await setCurrentInventory(resourceId);
     await persistInventorySnapshots(resourceId, rows, snapshotDate);
 
     await writeAudit({
