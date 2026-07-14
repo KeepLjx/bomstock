@@ -18,6 +18,7 @@ export async function GET(req: NextRequest) {
     if (e instanceof UnauthorizedError) {
       return NextResponse.json({ error: e.message }, { status: 401 });
     }
+    console.error("[/api/inventory/realtime] 实时库存计算失败:", e);
     return NextResponse.json(
       { error: `实时库存计算失败：${(e as Error).message}` },
       { status: 500 },
