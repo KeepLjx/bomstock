@@ -1,9 +1,9 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import UploadZone from "./UploadZone";
 import ConfigPanel, { type ProcessPayload } from "./ConfigPanel";
 import EditableTable from "./EditableTable";
-import UpdateRequiredModal from "./UpdateRequiredModal";
 import type {
   UploadResponse,
   WorkflowSummaryDTO,
@@ -118,9 +118,17 @@ export default function Wizard() {
     !resources.workOrder.updatedToday;
   return (
     <div className="space-y-6">
-      {/* 每日更新强制弹窗 */}
-      {needUpdate && resources && (
-        <UpdateRequiredModal resources={resources} onUpdated={refreshResources} />
+      {/* 每日数据强制更新弹窗已移至首页（Dashboard）。
+          库存表与工单表为全局共享持久资源，首页更新后本页同步可见。 */}
+      {needUpdate && (
+        <div className="flex items-center gap-2 rounded-lg border border-[#f9ab00]/40 bg-[#fef7e0] px-4 py-2.5 text-sm text-[#b06000]">
+          <span className="leading-none">⚠</span>
+          <span>
+            库存表 / 工单表今日未更新，请先到
+            <Link href="/" className="mx-1 font-medium text-[#1a73e8] underline">首页</Link>
+            完成每日数据强制更新（库存与工单为全局共享资源，更新后自动同步至本页）。
+          </span>
+        </div>
       )}
       {/* 步骤指示器（可点击切换已到达的步骤） */}
       <div className="flex items-center justify-center">

@@ -93,6 +93,15 @@ export async function clearJobDemands(jobId: string): Promise<void> {
   await db.delete(bomDemands).where(eq(bomDemands.jobId, jobId));
 }
 
+/**
+ * 级联删除某 BOM 作业：先删其需求明细，再删作业记录本身。
+ * （磁盘文件由调用方通过 storage.removeJobDir 一并清理）
+ */
+export async function deleteJobCascade(jobId: string): Promise<void> {
+  await db.delete(bomDemands).where(eq(bomDemands.jobId, jobId));
+  await db.delete(bomJobs).where(eq(bomJobs.id, jobId));
+}
+
 // ---------------------------------------------------------------------------
 // 重复判定与生命周期
 // ---------------------------------------------------------------------------

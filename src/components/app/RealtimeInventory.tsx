@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface Material {
   materialCode: string;
@@ -44,14 +45,56 @@ interface MgmtJob {
   deductionStatus: string | null;
   reservedAt: string | null;
 }
+interface MaterialDemandSource {
+  jobId: string;
+  jobName: string;
+  bizKey: string | null;
+  sets: number;
+  requiredQty: number;
+  sourceRowNo: number | null;
+  sourceSheet: string | null;
+  demandCount: number;
+  skipped: boolean;
+  deductionStatus: string | null;
+  effective: boolean;
+  uploadedBy: string | null;
+  uploaderName: string | null;
+  jobCreatedAt: string | null;
+  reservedAt: string | null;
+  fileOriginalName: string | null;
+  duplicateOfJobId: string | null;
+  replacedByJobId: string | null;
+}
+interface MaterialInventoryInfo {
+  resourceId: string | null;
+  resourceName: string;
+  effectiveDate: string | null;
+  updatedAt: string | null;
+  rowCount: number;
+  snapshotCount: number;
+}
+interface MaterialDetail {
+  materialCode: string;
+  materialName: string;
+  spec: string;
+  baseQty: number;
+  totalDemand: number;
+  grossDemand: number;
+  availableQty: number;
+  shortage: number;
+  inventory: MaterialInventoryInfo;
+  sourceCount: number;
+  sources: MaterialDemandSource[];
+}
 
+// 列定义：四列数值列起始宽度保持一致；表格整体铺满容器（w-full）后按比例分配剩余空间
 const COLS: { key: string; label: string; w: number; align?: "right" }[] = [
-  { key: "code", label: "物料编码", w: 220 },
-  { key: "name", label: "名称 / 规格", w: 240 },
-  { key: "base", label: "基线库存", w: 140, align: "right" },
-  { key: "reserved", label: "预扣减", w: 140, align: "right" },
-  { key: "available", label: "可用库存", w: 140, align: "right" },
-  { key: "shortage", label: "欠料", w: 130, align: "right" },
+  { key: "code", label: "物料编码", w: 260 },
+  { key: "name", label: "名称 / 规格", w: 320 },
+  { key: "base", label: "基线库存", w: 160, align: "right" },
+  { key: "reserved", label: "预扣减", w: 160, align: "right" },
+  { key: "available", label: "可用库存", w: 160, align: "right" },
+  { key: "shortage", label: "欠料", w: 160, align: "right" },
 ];
 const DEFAULT_ROW_H = 36;
 
@@ -80,6 +123,15 @@ export default function RealtimeInventory() {
   const [filter, setFilter] = useState("");
   const [onlyShortage, setOnlyShortage] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // 「同步到全局」确认弹窗
+  const [syncOpen, setSyncOpen] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
+
+  // 物料编码点击详情（窗口中央弹窗，点击空白关闭）
+  const [detailCode, setDetailCode] = useState<string | null>(null);
+  const [detailCache, setDetailCache] = useState<Record<string, MaterialDetail>>({});
+  const [detailLoading, setDetailLoading] = useState<string | null>(null);
 
   // 可调列宽 / 行高
   const [colWidths, setColWidths] = useState<number[]>(COLS.map((c) => c.w));
@@ -113,6 +165,11 @@ export default function RealtimeInventory() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // phase3 切换后清空明细缓存（重新计算「工单跳过」标记）
+  useEffect(() => {
+    setDetailCache({});
+  }, [phase3]);
 
   function flash(ok: boolean, text: string) {
     setMsg({ ok, text });
@@ -149,6 +206,58 @@ export default function RealtimeInventory() {
     setSimMode(false);
     setSim(null);
     if (data) setSelected(new Set(data.jobs.filter((j) => !j.skipped).map((j) => j.id)));
+  }
+
+  /** 将左侧勾选状态同步为全局扣减状态（勾选→active，未勾选→inactive） */
+  async function doSyncGlobal() {
+    const updates = mgmt
+      .filter((j) => {
+        const s = j.deductionStatus ?? "active";
+        return s === "active" || s === "inactive";
+      })
+      .map((j) => ({
+        jobId: j.id,
+        status: (selected.has(j.id) ? "active" : "inactive") as "active" | "inactive",
+      }));
+    setSyncBusy(true);
+    try {
+      const res = await fetch("/api/bom/sync-global", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ updates }),
+      });
+      const d = await res.json();
+      if (!res.ok) return flash(false, d.error || "同步失败");
+      flash(true, `已同步到全局，共更新 ${d.changed ?? 0} 个 occupied BOM 的扣减状态`);
+      setSyncOpen(false);
+      await refresh();
+    } finally {
+      setSyncBusy(false);
+    }
+  }
+
+  /** 拉取某物料的来源明细（带缓存） */
+  async function fetchDetail(code: string) {
+    if (detailCache[code]) return;
+    setDetailLoading(code);
+    try {
+      const res = await fetch(
+        `/api/inventory/material-detail?code=${encodeURIComponent(code)}&phase3=${phase3 ? "true" : "false"}`,
+        { cache: "no-store" },
+      );
+      if (res.ok) {
+        const d = (await res.json()) as MaterialDetail;
+        setDetailCache((prev) => ({ ...prev, [code]: d }));
+      }
+    } finally {
+      setDetailLoading(null);
+    }
+  }
+
+  /** 点击物料编码：在窗口中央打开详情弹窗 */
+  function onCodeClick(code: string) {
+    setDetailCode(code);
+    fetchDetail(code);
   }
 
   async function toggleDeduction(job: MgmtJob) {
@@ -290,6 +399,11 @@ export default function RealtimeInventory() {
     return true;
   });
 
+  // 表格铺满容器：用百分比列宽（固定 table-layout），确保宽屏铺满且列起始宽度一致
+  const IDX_WEIGHT = 50;
+  const totalWeight = IDX_WEIGHT + colWidths.reduce((a, b) => a + b, 0);
+  const pct = (w: number) => `${((w / totalWeight) * 100).toFixed(2)}%`;
+
   return (
     <div className="flex h-full flex-col overflow-hidden">
       {/* 标题栏 */}
@@ -408,7 +522,15 @@ export default function RealtimeInventory() {
               );
             })}
           </div>
-          <div className="border-t border-[#eee] px-3 py-3">
+          <div className="space-y-2 border-t border-[#eee] px-3 py-3">
+            <button
+              onClick={() => setSyncOpen(true)}
+              disabled={mgmt.length === 0}
+              className="w-full rounded-md border border-[#137333] bg-[#e6f4ea] px-3 py-2 text-sm font-medium text-[#137333] transition hover:bg-[#ceead6] disabled:opacity-50"
+              title="将勾选状态写入全局扣减状态（勾选→启用，未勾选→停用）"
+            >
+              ⬆ 同步勾选到全局
+            </button>
             <button
               onClick={runSimulation}
               disabled={loading}
@@ -416,8 +538,8 @@ export default function RealtimeInventory() {
             >
               {loading ? "计算中…" : "模拟重新计算"}
             </button>
-            <p className="mt-1.5 text-center text-[10px] text-[#9aa0a6]">
-              {simMode ? "当前为模拟结果（未改全局）" : "勾选 BOM 后模拟；启停/替换直接改全局"}
+            <p className="text-center text-[10px] text-[#9aa0a6]">
+              {simMode ? "当前为模拟结果（未改全局）" : "勾选→同步到全局，或模拟重新计算"}
             </p>
           </div>
         </div>
@@ -452,15 +574,20 @@ export default function RealtimeInventory() {
             拖拽表头右侧边缘调整<strong>列宽</strong>，拖拽行号底部边缘调整<strong>行高</strong>
           </div>
           <div className="min-h-0 flex-1 overflow-auto" style={{ minHeight: 0 }}>
-            <table className="border-separate border-spacing-0 text-sm">
+            <table className="w-full border-separate border-spacing-0 text-sm" style={{ tableLayout: "fixed" }}>
+              <colgroup>
+                <col style={{ width: pct(IDX_WEIGHT) }} />
+                {COLS.map((col, ci) => (
+                  <col key={col.key} style={{ width: pct(colWidths[ci]) }} />
+                ))}
+              </colgroup>
               <thead className="sticky top-0 z-10">
                 <tr>
-                  <th className="sticky left-0 z-20 border-b border-r border-[#dadce0] bg-[#f1f3f4] px-2 text-center text-xs font-medium text-[#5f6368]" style={{ width: 50 }}>#</th>
+                  <th className="sticky left-0 z-20 border-b border-r border-[#dadce0] bg-[#f1f3f4] px-2 text-center text-xs font-medium text-[#5f6368]">#</th>
                   {COLS.map((col, ci) => (
                     <th
                       key={col.key}
                       className={`relative select-none border-b border-r border-[#dadce0] bg-[#f1f3f4] px-3 py-2 ${col.align === "right" ? "text-right" : "text-left"} font-medium text-[#202124]`}
-                      style={{ width: colWidths[ci] }}
                     >
                       <span className="block truncate">{col.label}</span>
                       <span
@@ -497,7 +624,15 @@ export default function RealtimeInventory() {
                         />
                       </td>
                       <td className="overflow-hidden border-b border-r border-[#e8eaed] px-3 font-mono text-xs text-[#202124]" style={{ height: h, background: rowBg }}>
-                        <div className="truncate" title={m.materialCode}>{m.materialCode}</div>
+                        <button
+                          type="button"
+                          onClick={() => onCodeClick(m.materialCode)}
+                          title="点击查看该物料的来源与需求明细"
+                          className="flex w-full items-center gap-1 text-left transition hover:text-[#1a73e8]"
+                        >
+                          <span className="truncate underline decoration-dotted underline-offset-2">{m.materialCode}</span>
+                          <span className="shrink-0 text-[#1a73e8]/60">ℹ</span>
+                        </button>
                       </td>
                       <td className="overflow-hidden border-b border-r border-[#e8eaed] px-3 text-[#3c4043]" style={{ height: h, background: rowBg }}>
                         <div className="truncate text-[#202124]" title={m.materialName}>{m.materialName || "—"}</div>
@@ -515,8 +650,202 @@ export default function RealtimeInventory() {
           </div>
         </div>
       </div>
+
+      {/* 「同步勾选到全局」确认弹窗 */}
+      <ConfirmDialog
+        open={syncOpen}
+        title="同步勾选到全局"
+        danger={false}
+        busy={syncBusy}
+        confirmText="确定同步"
+        onCancel={() => setSyncOpen(false)}
+        onConfirm={doSyncGlobal}
+        message={
+          <div>
+            将把左侧勾选状态写入全局扣减状态：
+            <ul className="mt-1.5 list-disc pl-5 text-[#5f6368]">
+              <li>勾选的 occupied BOM → <b className="text-[#137333]">active（参与预扣减）</b></li>
+              <li>未勾选的 occupied BOM → <b className="text-[#b06000]">inactive（停止扣减）</b></li>
+            </ul>
+            <div className="mt-2 text-[#c5221f]">该操作会立即影响实时可用库存的全局口径，是否确定？</div>
+          </div>
+        }
+      />
+
+      {/* 物料编码详情（点击在窗口中央展示，点击空白处关闭） */}
+      <MaterialDetailModal
+        code={detailCode}
+        detail={detailCode ? detailCache[detailCode] : undefined}
+        loading={detailCode ? detailLoading === detailCode : false}
+        onClose={() => setDetailCode(null)}
+      />
     </div>
   );
+}
+
+/** 物料详情：窗口居中弹窗，点击遮罩（空白处）关闭 */
+function MaterialDetailModal({
+  code,
+  detail,
+  loading,
+  onClose,
+}: {
+  code: string | null;
+  detail: MaterialDetail | undefined;
+  loading: boolean;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    if (!code) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [code, onClose]);
+
+  if (!code) return null;
+  return (
+    <div
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="flex max-h-[85vh] w-full max-w-[560px] flex-col overflow-hidden rounded-xl bg-white shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-2 border-b border-[#eee] px-4 py-3">
+          <div className="min-w-0">
+            <div className="break-all font-mono text-sm font-semibold text-[#1a73e8]">{code}</div>
+            <div className="mt-0.5 break-words text-xs text-[#5f6368]">
+              {detail?.materialName || "（物料名称未知）"}
+              {detail?.spec ? <span className="text-[#9aa0a6]"> · {detail.spec}</span> : null}
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="ml-2 shrink-0 rounded px-2 py-1 text-sm text-[#5f6368] transition hover:bg-[#f1f3f4]"
+            title="关闭（点击空白处也可关闭）"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-3 text-xs">
+          {!detail && loading && (
+            <div className="py-8 text-center text-[#9aa0a6]">加载明细中…</div>
+          )}
+          {!detail && !loading && (
+            <div className="py-8 text-center text-[#9aa0a6]">暂无明细</div>
+          )}
+          {detail && (
+            <>
+              {/* 库存口径概览 */}
+              <div className="mb-2 grid grid-cols-2 gap-1.5">
+                <KV k="基线库存" v={fmt(detail.baseQty)} />
+                <KV k="计入扣减总量" v={fmt(detail.totalDemand)} warn={detail.totalDemand > 0} />
+                <KV k="全部需求合计" v={fmt(detail.grossDemand)} />
+                <KV
+                  k="可用 / 欠料"
+                  v={detail.shortage > 0 ? `${fmt(detail.availableQty)}（欠 ${fmt(detail.shortage)}）` : fmt(detail.availableQty)}
+                  danger={detail.shortage > 0}
+                />
+              </div>
+
+              {/* 当前库存表信息（联表 bom_resources） */}
+              <SectionTitle>当前库存表来源</SectionTitle>
+              <div className="mb-2 grid grid-cols-2 gap-1.5">
+                <KV k="库存表文件" v={detail.inventory.resourceName || "未上传"} />
+                <KV k="快照行数" v={String(detail.inventory.snapshotCount)} />
+                <KV k="生效日期" v={detail.inventory.effectiveDate || "—"} />
+                <KV k="更新时间" v={fmtDateTime(detail.inventory.updatedAt)} />
+              </div>
+
+              {/* 来源明细 */}
+              <SectionTitle>
+                来自的 occupied BOM（{detail.sourceCount} · 需求明细 {detail.sources.reduce((n, s) => n + s.demandCount, 0)} 行）
+              </SectionTitle>
+              {detail.sources.length === 0 ? (
+                <div className="py-2 text-center text-[11px] text-[#9aa0a6]">无任何 occupied BOM 引用该物料</div>
+              ) : (
+                <div className="space-y-1.5 pb-1">
+                  {detail.sources.map((s) => (
+                    <div
+                      key={s.jobId}
+                      className={`rounded border px-2.5 py-2 ${
+                        s.effective ? "border-[#c6e7d0] bg-[#f6fef9]" : "border-[#eee] bg-[#fafafa]"
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="break-all font-medium text-[#202124]">{s.jobName || s.jobId.slice(0, 10)}</span>
+                        <span className="shrink-0 font-semibold text-[#b06000]">需求 {fmt(s.requiredQty)}</span>
+                      </div>
+                      {s.fileOriginalName && s.fileOriginalName !== s.jobName && (
+                        <div className="mt-0.5 break-all text-[10px] text-[#9aa0a6]">📄 {s.fileOriginalName}</div>
+                      )}
+                      <div className="mt-1.5 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-[#5f6368]">
+                        <Meta label="套数" value={String(s.sets)} />
+                        <Meta label="需求行数" value={String(s.demandCount)} />
+                        <Meta label="来源行号" value={s.sourceRowNo != null ? String(s.sourceRowNo) : "—"} />
+                        <Meta label="来源 sheet" value={s.sourceSheet || "—"} />
+                        <Meta label="上传者" value={s.uploaderName || "—"} />
+                        <Meta label="上传时间" value={fmtDateTime(s.jobCreatedAt)} />
+                        <Meta label="预留时间" value={fmtDateTime(s.reservedAt)} />
+                        <Meta label="biz_key" value={s.bizKey || "—"} mono />
+                      </div>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px]">
+                        <SourceTag effective={s.effective} skipped={s.skipped} status={s.deductionStatus ?? "active"} />
+                        {s.duplicateOfJobId && (
+                          <span className="rounded bg-[#fef7e0] px-1 text-[#b06000]">重复自 {s.duplicateOfJobId.slice(0, 10)}</span>
+                        )}
+                        {s.replacedByJobId && (
+                          <span className="rounded bg-[#fce8e6] px-1 text-[#c5221f]">已被 {s.replacedByJobId.slice(0, 10)} 替换</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div className="pt-1 text-[10px] text-[#9aa0a6]">点击空白处或 ✕ 关闭</div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KV({ k, v, warn, danger }: { k: string; v: string; warn?: boolean; danger?: boolean }) {
+  return (
+    <div className="rounded border border-[#eee] bg-[#f8f9fa] px-2 py-1">
+      <div className="text-[10px] text-[#5f6368]">{k}</div>
+      <div className={`font-medium ${danger ? "text-[#c5221f]" : warn ? "text-[#b06000]" : "text-[#202124]"}`}>{v}</div>
+    </div>
+  );
+}
+
+function SectionTitle({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="mb-1 mt-2 border-b border-dashed border-[#eee] pb-1 text-[11px] font-semibold text-[#202124]">
+      {children}
+    </div>
+  );
+}
+
+function Meta({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-baseline gap-1">
+      <span className="shrink-0 text-[#9aa0a6]">{label}:</span>
+      <span className={`min-w-0 break-all ${mono ? "font-mono" : ""} text-[#3c4043]`} title={value}>{value}</span>
+    </div>
+  );
+}
+
+function SourceTag({ effective, skipped, status }: { effective: boolean; skipped: boolean; status: string }) {
+  if (effective) return <span className="rounded bg-[#e6f4ea] px-1 text-[#137333]">计入扣减</span>;
+  if (skipped) return <span className="rounded bg-[#fef7e0] px-1 text-[#b06000]">工单跳过</span>;
+  if (status === "inactive") return <span className="rounded bg-[#f1f3f4] px-1 text-[#5f6368]">已停用</span>;
+  return <span className="rounded bg-[#f1f3f4] px-1 text-[#5f6368]">{status}</span>;
 }
 
 function Mini({ label, value, danger, warn }: { label: string; value: string; danger?: boolean; warn?: boolean }) {

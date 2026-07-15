@@ -2,6 +2,10 @@
 
 import { useCallback, useRef, useState } from "react";
 import Link from "next/link";
+import ConfirmDialog from "./ConfirmDialog";
+import UpdateRequiredModal from "@/components/bom/UpdateRequiredModal";
+import type { ResourcesState } from "@/components/bom/types";
+import { fetchResources } from "@/lib/bom/client-resources";
 
 interface CurrentInv {
   resourceId: string | null;
@@ -36,25 +40,31 @@ function fmtDateTime(s: string | null): string {
   }
 }
 
-type UploadKind = "inventory" | "occupied";
+type UploadKind = "inventory" | "occupied" | "work_order";
 
 export default function Dashboard() {
   const [summary, setSummary] = useState<RealtimeSummary | null>(null);
   const [occupied, setOccupied] = useState<OccupiedJob[]>([]);
   const [activeCount, setActiveCount] = useState(0);
   const [busy, setBusy] = useState<UploadKind | null>(null);
+  const [jobBusy, setJobBusy] = useState<string | null>(null);
   const [toast, setToast] = useState<{ ok: boolean; msg: string } | null>(null);
   const [occSets, setOccSets] = useState("");
+  const [delTarget, setDelTarget] = useState<OccupiedJob | null>(null);
+  // 持久资源（库存表 / 工单表）状态 —— 用于「每日数据强制更新」弹窗
+  const [resources, setResources] = useState<ResourcesState | null>(null);
   const fileRefs = useRef<Record<UploadKind, HTMLInputElement | null>>({
     inventory: null,
     occupied: null,
+    work_order: null,
   });
 
   const refresh = useCallback(async () => {
     try {
-      const [rtRes, jobsRes] = await Promise.all([
+      const [rtRes, jobsRes, resRes] = await Promise.all([
         fetch("/api/inventory/realtime", { cache: "no-store" }),
         fetch("/api/bom/jobs?job_type=occupied_bom", { cache: "no-store" }),
+        fetchResources(),
       ]);
       if (rtRes.ok) setSummary((await rtRes.json()) as RealtimeSummary);
       if (jobsRes.ok) {
@@ -63,6 +73,7 @@ export default function Dashboard() {
         setOccupied(list);
         setActiveCount(list.filter((x) => (x.deductionStatus ?? "active") === "active").length);
       }
+      setResources(resRes);
     } catch {
       /* ignore */
     }
@@ -87,7 +98,15 @@ export default function Dashboard() {
         const res = await fetch("/api/inventory/upload", { method: "POST", body: fd });
         const data = await res.json();
         if (!res.ok) return flash(false, data.error || "上传失败");
-        flash(true, `库存表已设为 current，共解析 ${data.rows} 条物料`);
+        flash(true, `库存表已设为 current（强制覆盖），共解析 ${data.rows} 条物料`);
+      } else if (kind === "work_order") {
+        const woFd = new FormData();
+        woFd.append("kind", "work_order");
+        woFd.append("files", file);
+        const res = await fetch("/api/bom/resources", { method: "POST", body: woFd });
+        const data = await res.json();
+        if (!res.ok) return flash(false, data.error || "上传失败");
+        flash(true, `工单调拨齐套报表已强制更新，共 ${data.file?.rowCount ?? 0} 行`);
       } else {
         fd.append("job_type", "occupied_bom");
         if (occSets) fd.append("sets", occSets);
@@ -117,6 +136,43 @@ export default function Dashboard() {
     e.target.value = "";
   }
 
+  /** 替换：将某 occupied BOM 设为该 biz_key 的当前版本 */
+  async function replaceOccupied(job: OccupiedJob) {
+    if (!job.bizKey) return flash(false, "该 BOM 缺少 biz_key，无法替换");
+    setJobBusy(job.id);
+    try {
+      const res = await fetch("/api/bom/replace", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) return flash(false, data.error || "替换失败");
+      flash(true, `已将「${job.name}」设为当前版本，旧版本 ${data.replacedIds?.length ?? 0} 个标记为 replaced`);
+      await refresh();
+    } finally {
+      setJobBusy(null);
+    }
+  }
+
+  /** 删除整条 occupied BOM 记录（含需求明细与磁盘文件） */
+  async function deleteOccupied(job: OccupiedJob) {
+    setJobBusy(job.id);
+    try {
+      const res = await fetch("/api/bom/delete-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) return flash(false, data.error || "删除失败");
+      flash(true, `已删除「${job.name}」及其全部记录`);
+      await refresh();
+    } finally {
+      setJobBusy(null);
+    }
+  }
+
   return (
     <div className="mx-auto w-[90%] max-w-[1800px] py-8">
       <div className="mb-6">
@@ -137,6 +193,13 @@ export default function Dashboard() {
           {toast.msg}
         </div>
       )}
+
+      {/* 每日数据强制更新弹窗（库存表 / 工单表当日未更新时强制要求） */}
+      {/* 上传后库存与工单会同步到本页与 BOM 匹配页（共享同一持久资源） */}
+      {resources &&
+        (!resources.inventory.updatedToday || !resources.workOrder.updatedToday) && (
+          <UpdateRequiredModal resources={resources} onUpdated={refresh} />
+        )}
 
       {/* 概览卡片 */}
       <div className="mb-8 grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -166,11 +229,15 @@ export default function Dashboard() {
         />
       </div>
 
-      {/* 上传区 */}
+      {/* 每日数据更新（强制覆盖当前） */}
+      <div className="mb-2 mt-2 flex items-center gap-2">
+        <h2 className="text-base font-medium text-[#202124]">每日数据更新</h2>
+        <span className="rounded-full bg-[#fce8e6] px-2 py-0.5 text-[11px] font-medium text-[#c5221f]">强制覆盖当前版本</span>
+      </div>
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <UploadCard
-          title="上传库存表（inventory）"
-          desc="每日更新，上传后自动设为 current，旧表保留历史。"
+          title="每日库存数据更新（inventory）"
+          desc="每日更新，上传后强制设为 current，旧表保留历史。"
           badge="current 唯一"
           color="#1a73e8"
           accept=".xlsx,.xlsm,.xls"
@@ -178,6 +245,24 @@ export default function Dashboard() {
           onPick={() => onPick("inventory")}
           onDrop={(f) => handleUpload("inventory", f)}
         />
+        <UploadCard
+          title="每日工单数据更新（工单调拨齐套报表）"
+          desc="每日更新，用于阶段三「工单跳过」判定，上传后强制覆盖旧版本。"
+          badge="工单 · 强制覆盖"
+          color="#00897b"
+          accept=".xlsx,.xlsm,.xls"
+          busy={busy === "work_order"}
+          onPick={() => onPick("work_order")}
+          onDrop={(f) => handleUpload("work_order", f)}
+        />
+      </div>
+
+      {/* occupied BOM 上传 */}
+      <div className="mb-2 mt-6 flex items-center gap-2">
+        <h2 className="text-base font-medium text-[#202124]">上传 occupied BOM（参与预扣减）</h2>
+        <span className="rounded-full bg-[#fef7e0] px-2 py-0.5 text-[11px] font-medium text-[#b06000]">预扣减</span>
+      </div>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <UploadCard
           title="上传 occupied BOM（参与扣减）"
           desc="默认 active 参与预扣减。内容重复自动去重，同 biz_key 支持版本替换。"
@@ -204,6 +289,7 @@ export default function Dashboard() {
       </div>
 
       <input ref={(el) => { fileRefs.current.inventory = el; }} type="file" accept=".xlsx,.xlsm,.xls" hidden onChange={(e) => onChange("inventory", e)} />
+      <input ref={(el) => { fileRefs.current.work_order = el; }} type="file" accept=".xlsx,.xlsm,.xls" hidden onChange={(e) => onChange("work_order", e)} />
       <input ref={(el) => { fileRefs.current.occupied = el; }} type="file" accept=".xlsx,.xlsm,.xls" hidden onChange={(e) => onChange("occupied", e)} />
 
       {/* 快捷入口 */}
@@ -216,37 +302,83 @@ export default function Dashboard() {
         </Link>
       </div>
 
-      {/* 最近 occupied BOM */}
+      {/* 已上传 occupied BOM（参考 BOM 匹配中的「已上传文件」，支持替换与删除） */}
       <div className="mt-8">
-        <h2 className="mb-3 text-base font-medium text-[#202124]">最近上传的 occupied BOM</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-base font-medium text-[#202124]">已上传的 occupied BOM</h2>
+          <span className="text-xs text-[#9aa0a6]">{occupied.length} 个 · {activeCount} 个参与扣减</span>
+        </div>
         <div className="overflow-hidden rounded-lg border border-[#dadce0]">
-          <table className="w-full text-sm">
+          <table className="w-full min-w-[760px] text-sm">
             <thead className="bg-[#f8f9fa] text-left text-[#5f6368]">
               <tr>
                 <th className="px-4 py-2 font-medium">文件名</th>
                 <th className="px-4 py-2 font-medium">套数</th>
                 <th className="px-4 py-2 font-medium">状态</th>
                 <th className="px-4 py-2 font-medium">biz_key</th>
+                <th className="px-4 py-2 font-medium">操作</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[#eee]">
               {occupied.length === 0 && (
-                <tr><td colSpan={4} className="px-4 py-6 text-center text-[#9aa0a6]">暂无 occupied BOM，请上传</td></tr>
+                <tr><td colSpan={5} className="px-4 py-6 text-center text-[#9aa0a6]">暂无 occupied BOM，请上传</td></tr>
               )}
-              {occupied.slice(0, 8).map((j) => (
-                <tr key={j.id}>
-                  <td className="px-4 py-2 text-[#202124]">{j.name}</td>
-                  <td className="px-4 py-2 text-[#5f6368]">{j.sets ?? "—"}</td>
-                  <td className="px-4 py-2">
-                    <StatusBadge status={j.deductionStatus ?? "active"} />
-                  </td>
-                  <td className="px-4 py-2 font-mono text-xs text-[#5f6368]">{j.bizKey ?? "—"}</td>
-                </tr>
-              ))}
+              {occupied.slice(0, 30).map((j) => {
+                const isActive = (j.deductionStatus ?? "active") === "active";
+                const terminal = j.deductionStatus === "replaced" || j.deductionStatus === "duplicate";
+                return (
+                  <tr key={j.id}>
+                    <td className="px-4 py-2 text-[#202124]">{j.name}</td>
+                    <td className="px-4 py-2 text-[#5f6368]">{j.sets ?? "—"}</td>
+                    <td className="px-4 py-2">
+                      <StatusBadge status={j.deductionStatus ?? "active"} />
+                    </td>
+                    <td className="px-4 py-2 font-mono text-xs text-[#5f6368]">{j.bizKey ?? "—"}</td>
+                    <td className="px-4 py-2">
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          onClick={() => replaceOccupied(j)}
+                          disabled={jobBusy === j.id || !j.bizKey || isActive || terminal}
+                          className="rounded bg-[#e8f0fe] px-2 py-1 text-xs font-medium text-[#1a73e8] transition hover:bg-[#d2e3fc] disabled:opacity-40"
+                        >
+                          替换旧版本
+                        </button>
+                        <button
+                          onClick={() => setDelTarget(j)}
+                          disabled={jobBusy === j.id}
+                          className="rounded bg-[#fce8e6] px-2 py-1 text-xs font-medium text-[#c5221f] transition hover:bg-[#f9d0cc] disabled:opacity-40"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={!!delTarget}
+        danger
+        busy={!!delTarget && jobBusy === delTarget.id}
+        title="删除 occupied BOM"
+        confirmText="确定删除"
+        onCancel={() => setDelTarget(null)}
+        onConfirm={() => {
+          if (delTarget) deleteOccupied(delTarget).then(() => setDelTarget(null));
+        }}
+        message={
+          <div>
+            确定删除「<b>{delTarget?.name}</b>」吗？
+            <div className="mt-1 text-[#c5221f]">
+              将同时删除其全部需求明细记录与磁盘文件，且<strong>不可恢复</strong>。
+            </div>
+          </div>
+        }
+      />
     </div>
   );
 }

@@ -66,6 +66,16 @@ export function removeJobFile(jobId: string, storedName: string): void {
   }
 }
 
+/** 删除整个任务目录（删除作业时清理磁盘） */
+export function removeJobDir(jobId: string): void {
+  try {
+    const dir = jobDir(jobId);
+    if (dir && fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
+  } catch {
+    // 忽略删除失败
+  }
+}
+
 /** 从 JobState 构建可入库的记录 */
 function stateToRow(jobId: string, name: string, state: JobState) {
   const jsonb = (v: unknown) => (v === null ? null : sql`${JSON.stringify(v)}::jsonb`);

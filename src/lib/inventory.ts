@@ -15,8 +15,9 @@ import {
   bomDemands,
   bomJobs,
   bomResources,
+  users,
 } from "@/db/schema";
-import { eq, and, isNotNull } from "drizzle-orm";
+import { eq, and, isNotNull, inArray } from "drizzle-orm";
 import {
   readCSV,
   tableStr,
@@ -494,5 +495,244 @@ export async function calculateRealtime(
     runPhase3,
     jobs,
     materials,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 单物料明细：该物料来自哪些 occupied BOM，以及各自需求量（联表查询，完整信息）
+// ---------------------------------------------------------------------------
+
+export interface MaterialDemandSource {
+  jobId: string;
+  jobName: string;
+  bizKey: string | null;
+  sets: number;
+  requiredQty: number;
+  sourceRowNo: number | null;
+  sourceSheet: string | null;
+  /** 该作业对本物料的需求明细行数 */
+  demandCount: number;
+  skipped: boolean;
+  deductionStatus: string | null;
+  /** 是否实际计入全局预扣减（active 且未被工单跳过） */
+  effective: boolean;
+  /** 上传者用户 id */
+  uploadedBy: string | null;
+  /** 上传者显示名（联表 users 解析） */
+  uploaderName: string | null;
+  jobCreatedAt: string | null;
+  reservedAt: string | null;
+  /** 作业原始文件名（files[0].originalName） */
+  fileOriginalName: string | null;
+  duplicateOfJobId: string | null;
+  replacedByJobId: string | null;
+}
+
+export interface MaterialInventoryInfo {
+  resourceId: string | null;
+  resourceName: string;
+  effectiveDate: string | null;
+  updatedAt: string | null;
+  rowCount: number;
+  /** 该物料在当前库存表中的快照行数（同一物料可能多行） */
+  snapshotCount: number;
+}
+
+export interface MaterialDetail {
+  materialCode: string;
+  materialName: string;
+  spec: string;
+  baseQty: number;
+  /** 实际计入扣减的需求总量（active 且未跳过） */
+  totalDemand: number;
+  /** 全部 occupied BOM 对该物料的需求合计（含停用/跳过/历史，用于参考） */
+  grossDemand: number;
+  availableQty: number;
+  shortage: number;
+  inventory: MaterialInventoryInfo;
+  sourceCount: number;
+  sources: MaterialDemandSource[];
+}
+
+/**
+ * 批量解析上传者 id -> 显示名（联表 users）
+ */
+async function resolveUserNames(
+  ids: string[],
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const uniq = Array.from(new Set(ids.filter(Boolean)));
+  if (uniq.length === 0) return out;
+  const rows = await db
+    .select({ id: users.id, displayName: users.displayName, username: users.username })
+    .from(users)
+    .where(inArray(users.id, uniq));
+  for (const r of rows) {
+    out.set(r.id, r.displayName || r.username);
+  }
+  return out;
+}
+
+/**
+ * 查询某物料编码的全部相关数据（联表查询，完整信息）：
+ * - 基线库存（current 库存快照 + 资源名/生效日/更新时间）
+ * - 来自哪些 occupied BOM：作业名 / biz_key / 套数 / 需求量 / 行号 / 来源 sheet /
+ *   需求行数 / 上传者 / 上传时间 / 预留时间 / 原始文件名 / 重复·替换关系
+ * - 是否被工单跳过、是否计入扣减
+ */
+export async function getMaterialDetail(
+  materialCode: string,
+  runPhase3 = true,
+): Promise<MaterialDetail> {
+  const current = await getCurrentInventory();
+  let baseQty = 0;
+  let materialName = "";
+  let spec = "";
+  let snapshotCount = 0;
+
+  if (current?.resourceId) {
+    const snaps = await db
+      .select()
+      .from(inventorySnapshots)
+      .where(
+        and(
+          eq(inventorySnapshots.resourceId, current.resourceId),
+          eq(inventorySnapshots.materialCode, materialCode),
+        ),
+      );
+    snapshotCount = snaps.length;
+    for (const s of snaps) {
+      baseQty += s.onHandQty;
+      if (!materialName && s.materialName) materialName = s.materialName ?? "";
+      if (!spec && s.spec) spec = s.spec ?? "";
+    }
+  }
+
+  const checker = runPhase3 ? await getWorkOrderChecker() : null;
+
+  // 全部 occupied BOM（active / inactive / replaced / duplicate 均纳入，完整展示）
+  const jobs = await db.select().from(bomJobs).where(eq(bomJobs.jobType, "occupied_bom"));
+
+  // 联表：需求明细 bom_demands JOIN bom_jobs（按物料编码过滤）
+  // 先对无 demands 的作业做懒加载补建，保证结果完整
+  const validJobIds = jobs.map((j) => j.id);
+  if (validJobIds.length > 0) {
+    const haveDemands = new Set(
+      (await db
+        .select({ jobId: bomDemands.jobId })
+        .from(bomDemands)
+        .where(inArray(bomDemands.jobId, validJobIds)))
+        .map((r) => r.jobId),
+    );
+    for (const j of jobs) {
+      if (haveDemands.has(j.id)) continue;
+      const files = (j.files ?? []) as { csvName?: string }[];
+      const csvName = files[0]?.csvName;
+      if (!csvName) continue;
+      try {
+        const rows = extractDemandRows(filePathOf(j.id, csvName), j.sets ?? 1);
+        await persistJobDemands(j.id, rows, null);
+      } catch {
+        // 补建失败跳过
+      }
+    }
+  }
+
+  // 一次性联表查询：bom_demands <-> bom_jobs（仅本物料）
+  const joined = await db
+    .select({
+      demand: bomDemands,
+      job: bomJobs,
+    })
+    .from(bomDemands)
+    .innerJoin(bomJobs, eq(bomDemands.jobId, bomJobs.id))
+    .where(eq(bomDemands.materialCode, materialCode));
+
+  // 按作业聚合
+  const byJob = new Map<string, typeof joined>();
+  for (const row of joined) {
+    const arr = byJob.get(row.job.id) ?? [];
+    arr.push(row);
+    byJob.set(row.job.id, arr);
+  }
+
+  // 解析上传者名（联表 users）
+  const uploaderIds = jobs.map((j) => j.uploadedBy).filter(Boolean) as string[];
+  const userNames = await resolveUserNames(uploaderIds);
+
+  const sources: MaterialDemandSource[] = [];
+  let totalDemand = 0;
+  let grossDemand = 0;
+
+  for (const j of jobs) {
+    const group = byJob.get(j.id);
+    if (!group || group.length === 0) continue;
+    const status = j.deductionStatus ?? "active";
+    const sets = j.sets ?? 1;
+    const requiredQty = group.reduce((s, r) => s + r.demand.requiredQty, 0);
+    const first = group[0];
+    if (!materialName && first.demand.materialName) materialName = first.demand.materialName ?? "";
+    if (!spec && first.demand.spec) spec = first.demand.spec ?? "";
+
+    let skipped = false;
+    if (checker) skipped = checker(extractProductName(j.name ?? ""), sets);
+    const effective = status === "active" && !skipped;
+
+    const files = (j.files ?? []) as { originalName?: string }[];
+
+    sources.push({
+      jobId: j.id,
+      jobName: j.name ?? "",
+      bizKey: j.bizKey,
+      sets,
+      requiredQty,
+      sourceRowNo: first.demand.sourceRowNo ?? null,
+      sourceSheet: first.demand.sourceSheet ?? null,
+      demandCount: group.length,
+      skipped,
+      deductionStatus: status,
+      effective,
+      uploadedBy: j.uploadedBy ?? null,
+      uploaderName: j.uploadedBy ? userNames.get(j.uploadedBy) ?? null : null,
+      jobCreatedAt: j.createdAt ? j.createdAt.toISOString() : null,
+      reservedAt: j.reservedAt ? j.reservedAt.toISOString() : null,
+      fileOriginalName: files[0]?.originalName ?? null,
+      duplicateOfJobId: j.duplicateOfJobId ?? null,
+      replacedByJobId: j.replacedByJobId ?? null,
+    });
+
+    grossDemand += requiredQty;
+    if (effective) totalDemand += requiredQty;
+  }
+
+  // 来源：计入扣减的优先，其次需求量降序，最后按上传时间降序
+  sources.sort((a, b) => {
+    if (a.effective !== b.effective) return a.effective ? -1 : 1;
+    if (b.requiredQty !== a.requiredQty) return b.requiredQty - a.requiredQty;
+    return (b.jobCreatedAt ?? "").localeCompare(a.jobCreatedAt ?? "");
+  });
+
+  const availableQty = baseQty - totalDemand;
+  const shortage = Math.max(0, totalDemand - baseQty);
+
+  return {
+    materialCode,
+    materialName,
+    spec,
+    baseQty,
+    totalDemand,
+    grossDemand,
+    availableQty,
+    shortage,
+    inventory: {
+      resourceId: current?.resourceId ?? null,
+      resourceName: current?.originalName ?? "",
+      effectiveDate: current?.effectiveDate ?? null,
+      updatedAt: current?.updatedAt ?? null,
+      rowCount: current?.rowCount ?? 0,
+      snapshotCount,
+    },
+    sourceCount: sources.length,
+    sources,
   };
 }

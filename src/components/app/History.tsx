@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import ResultPreviewModal from "./ResultPreviewModal";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface JobFile {
   originalName: string;
@@ -41,6 +42,8 @@ export default function History() {
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [previewJob, setPreviewJob] = useState<{ id: string; name: string } | null>(null);
+  const [delTarget, setDelTarget] = useState<Job | null>(null);
+  const [delBusy, setDelBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await fetch("/api/bom/jobs", { cache: "no-store" });
@@ -89,6 +92,24 @@ export default function History() {
       await load();
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function doDelete(job: Job) {
+    setDelBusy(true);
+    try {
+      const res = await fetch("/api/bom/delete-job", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: job.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) return flash(false, data.error || "删除失败");
+      flash(true, `已删除记录「${job.name ?? job.files[0]?.originalName ?? job.id.slice(0, 10)}」`);
+      setDelTarget(null);
+      await load();
+    } finally {
+      setDelBusy(false);
     }
   }
 
@@ -211,6 +232,14 @@ export default function History() {
                             {j.status === "done" ? "查看匹配结果" : "未匹配"}
                           </button>
                         )}
+                        {/* 删除该历史记录（所有类型均支持） */}
+                        <button
+                          onClick={() => setDelTarget(j)}
+                          disabled={busy === j.id}
+                          className="rounded bg-[#fce8e6] px-2 py-1 text-xs font-medium text-[#c5221f] transition hover:bg-[#f9d0cc] disabled:opacity-40"
+                        >
+                          删除
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -227,6 +256,26 @@ export default function History() {
           onClose={() => setPreviewJob(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={!!delTarget}
+        danger
+        busy={delBusy}
+        title="删除历史记录"
+        confirmText="确定删除"
+        onCancel={() => setDelTarget(null)}
+        onConfirm={() => {
+          if (delTarget) doDelete(delTarget);
+        }}
+        message={
+          <div>
+            确定删除历史记录「<b>{delTarget?.name ?? delTarget?.files[0]?.originalName ?? delTarget?.id.slice(0, 10)}</b>」吗？
+            <div className="mt-1 text-[#c5221f]">
+              将同时删除其需求明细与磁盘文件，且<strong>不可恢复</strong>。
+            </div>
+          </div>
+        }
+      />
     </div>
   );
 }
