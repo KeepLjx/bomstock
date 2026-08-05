@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 interface LogEntry {
   id: string;
@@ -62,7 +63,7 @@ export default function LogsView() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/audit-logs?limit=300", { cache: "no-store" });
+      const res = await apiFetch("/api/audit-logs?limit=300", { cache: "no-store" });
       if (res.ok) setLogs(((await res.json()).logs ?? []) as LogEntry[]);
     } finally {
       setLoading(false);

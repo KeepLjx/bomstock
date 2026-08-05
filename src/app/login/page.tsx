@@ -6,8 +6,9 @@ import { useSearchParams } from "next/navigation";
 function AuthForm() {
   const params = useSearchParams();
   const redirect = params.get("redirect") || "/";
+  const expired = params.get("expired") === "1";
   const [mode, setMode] = useState<"login" | "register">("login");
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -90,8 +91,7 @@ function AuthForm() {
               onClick={() => {
                 setMode(m);
                 reset();
-                if (m === "register" && username === "admin") setUsername("");
-                if (m === "login" && !username) setUsername("admin");
+                if (m === "register") setUsername("");
               }}
               className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium transition ${
                 mode === m ? "bg-[#1a73e8] text-white" : "text-[#5f6368] hover:bg-[#f1f3f4]"
@@ -103,6 +103,11 @@ function AuthForm() {
         </div>
 
         <form onSubmit={submit} className="rounded-xl border border-[#dadce0] bg-white p-6 shadow-sm">
+          {expired && (
+            <div className="mb-4 rounded-md border border-[#f5c6cb] bg-[#fff3f3] px-3 py-2 text-sm text-[#9C0006]">
+              登录已过期，请重新登录
+            </div>
+          )}
           {error && (
             <div className="mb-4 rounded-md border border-[#f5c6cb] bg-[#fff3f3] px-3 py-2 text-sm text-[#9C0006]">
               {error}
@@ -170,11 +175,6 @@ function AuthForm() {
               : mode === "login" ? "登录" : "注册并登录"}
           </button>
         </form>
-        <p className="mt-4 text-center text-xs text-[#9aa0a6]">
-          {mode === "login"
-            ? "首次使用默认账号 admin / admin123，或点上方「注册」创建新操作员"
-            : "注册即为操作员（全员同权、数据共享）"}
-        </p>
       </div>
     </div>
   );

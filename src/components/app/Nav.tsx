@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import ChangePasswordDialog from "./ChangePasswordDialog";
+import { apiFetch } from "@/lib/api-client";
 
 interface MeUser {
   id: string;
@@ -29,7 +30,7 @@ export default function Nav() {
   const [pwOpen, setPwOpen] = useState(false);
 
   useEffect(() => {
-    fetch("/api/auth/me", { cache: "no-store" })
+    apiFetch("/api/auth/me", { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => setUser(d?.user ?? null))
       .catch(() => setUser(null))
@@ -37,7 +38,7 @@ export default function Nav() {
   }, []);
 
   async function logout() {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await apiFetch("/api/auth/logout", { method: "POST" });
     router.replace("/login");
   }
 

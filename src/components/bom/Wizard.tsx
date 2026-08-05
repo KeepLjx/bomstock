@@ -11,6 +11,7 @@ import type {
   ResourcesState,
 } from "./types";
 import { fetchResources } from "@/lib/bom/client-resources";
+import { apiFetch } from "@/lib/api-client";
 type Step = "upload" | "config" | "result";
 const STEPS: { key: Step; label: string }[] = [
   { key: "upload", label: "上传" },
@@ -63,7 +64,7 @@ export default function Wizard() {
     // 保留配置（用于回退）
     setLastConfig(payload);
     try {
-      const res = await fetch("/api/bom/process", {
+      const res = await apiFetch("/api/bom/process", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: upload?.jobId, ...payload }),

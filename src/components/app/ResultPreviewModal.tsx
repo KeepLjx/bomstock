@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 interface CellData {
   v: string;
@@ -62,7 +63,7 @@ export default function ResultPreviewModal({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/bom/result?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
+      const res = await apiFetch(`/api/bom/result?jobId=${encodeURIComponent(jobId)}`, { cache: "no-store" });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "获取结果失败");
       const t = json.table as TableData;

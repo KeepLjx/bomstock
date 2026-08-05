@@ -7,6 +7,7 @@ import type {
   CellDataDTO,
 } from "./types";
 import { downloadFile } from "@/lib/bom/client-download";
+import { apiFetch } from "@/lib/api-client";
 
 interface Props {
   jobId: string;
@@ -309,7 +310,7 @@ export default function EditableTable({
     setDownloading(true);
     try {
       const exportTable = { ...table, rows };
-      const res = await fetch("/api/bom/export", {
+      const res = await apiFetch("/api/bom/export", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

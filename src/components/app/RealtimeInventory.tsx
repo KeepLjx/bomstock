@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import ConfirmDialog from "./ConfirmDialog";
+import { apiFetch } from "@/lib/api-client";
 
 interface Material {
   materialCode: string;
@@ -141,7 +142,7 @@ export default function RealtimeInventory() {
   const loadRealtime = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch("/api/inventory/realtime", { cache: "no-store" });
+      const res = await apiFetch("/api/inventory/realtime", { cache: "no-store" });
       if (res.ok) {
         const d = (await res.json()) as Result;
         setData(d);
@@ -154,7 +155,7 @@ export default function RealtimeInventory() {
   }, []);
 
   const loadMgmt = useCallback(async () => {
-    const res = await fetch("/api/bom/jobs?job_type=occupied_bom", { cache: "no-store" });
+    const res = await apiFetch("/api/bom/jobs?job_type=occupied_bom", { cache: "no-store" });
     if (res.ok) setMgmt(((await res.json()).jobs ?? []) as MgmtJob[]);
   }, []);
 
@@ -188,7 +189,7 @@ export default function RealtimeInventory() {
   async function runSimulation() {
     setLoading(true);
     try {
-      const res = await fetch("/api/bom/recalculate", {
+      const res = await apiFetch("/api/bom/recalculate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobIds: Array.from(selected), runPhase3: phase3 }),
@@ -221,7 +222,7 @@ export default function RealtimeInventory() {
       }));
     setSyncBusy(true);
     try {
-      const res = await fetch("/api/bom/sync-global", {
+      const res = await apiFetch("/api/bom/sync-global", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ updates }),
@@ -241,7 +242,7 @@ export default function RealtimeInventory() {
     if (detailCache[code]) return;
     setDetailLoading(code);
     try {
-      const res = await fetch(
+      const res = await apiFetch(
         `/api/inventory/material-detail?code=${encodeURIComponent(code)}&phase3=${phase3 ? "true" : "false"}`,
         { cache: "no-store" },
       );
@@ -264,7 +265,7 @@ export default function RealtimeInventory() {
     const next = (job.deductionStatus ?? "active") === "active" ? "inactive" : "active";
     setBusyId(job.id);
     try {
-      const res = await fetch("/api/bom/toggle-active", {
+      const res = await apiFetch("/api/bom/toggle-active", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id, status: next }),
@@ -283,7 +284,7 @@ export default function RealtimeInventory() {
     if (!confirm(`将「${job.name}」设为该 biz_key（${job.bizKey}）的当前版本？旧 active 版本会被标记为 replaced。`)) return;
     setBusyId(job.id);
     try {
-      const res = await fetch("/api/bom/replace", {
+      const res = await apiFetch("/api/bom/replace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id }),
@@ -303,12 +304,12 @@ export default function RealtimeInventory() {
     try {
       const isSim = simMode;
       const res = isSim
-        ? await fetch("/api/inventory/export", {
+        ? await apiFetch("/api/inventory/export", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ jobIds: Array.from(selected), runPhase3: phase3 }),
           })
-        : await fetch(`/api/inventory/export?phase3=${phase3 ? "true" : "false"}`);
+        : await apiFetch(`/api/inventory/export?phase3=${phase3 ? "true" : "false"}`);
       if (!res.ok) {
         const e = await res.json().catch(() => ({}));
         return flash(false, e.error || "导出失败");

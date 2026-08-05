@@ -3,6 +3,7 @@ import { useCallback, useRef, useState } from "react";
 import type { ParsedFileDTO, UploadResponse, ResourcesState } from "./types";
 import { KIND_LABELS } from "./types";
 import ResourceCards from "./ResourceCards";
+import { apiFetch } from "@/lib/api-client";
 interface Props {
   onConfirmed: (res: UploadResponse) => void;
   onError: (msg: string) => void;
@@ -58,7 +59,7 @@ export default function UploadZone({
         const fd = new FormData();
         for (const f of picked) fd.append("files", f);
         if (jobId) fd.append("jobId", jobId);
-        const res = await fetch("/api/bom/upload", {
+        const res = await apiFetch("/api/bom/upload", {
           method: "POST",
           body: fd,
         });
@@ -86,7 +87,7 @@ export default function UploadZone({
       if (!jobId) return;
       setRemoving((p) => ({ ...p, [storedName]: true }));
       try {
-        const res = await fetch("/api/bom/delete", {
+        const res = await apiFetch("/api/bom/delete", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ jobId, storedName }),
@@ -130,7 +131,7 @@ export default function UploadZone({
       fd.append("jobId", jobId);
       fd.append("replaceStoredName", target);
       fd.append("files", file);
-      const res = await fetch("/api/bom/replace", { method: "POST", body: fd });
+      const res = await apiFetch("/api/bom/replace", { method: "POST", body: fd });
       const data = await res.json();
       if (!res.ok) {
         onError(data.error || "替换失败");

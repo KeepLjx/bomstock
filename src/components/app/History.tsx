@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import ResultPreviewModal from "./ResultPreviewModal";
 import ConfirmDialog from "./ConfirmDialog";
+import { apiFetch } from "@/lib/api-client";
 
 interface JobFile {
   originalName: string;
@@ -46,7 +47,7 @@ export default function History() {
   const [delBusy, setDelBusy] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await fetch("/api/bom/jobs", { cache: "no-store" });
+    const res = await apiFetch("/api/bom/jobs", { cache: "no-store" });
     if (res.ok) setJobs(((await res.json()).jobs ?? []) as Job[]);
   }, []);
 
@@ -63,7 +64,7 @@ export default function History() {
     const next = (job.deductionStatus ?? "active") === "active" ? "inactive" : "active";
     setBusy(job.id);
     try {
-      const res = await fetch("/api/bom/toggle-active", {
+      const res = await apiFetch("/api/bom/toggle-active", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id, status: next }),
@@ -81,7 +82,7 @@ export default function History() {
     if (!confirm(`将「${job.name}」设为该 biz_key 的当前版本？旧 active 版本会被标记为 replaced。`)) return;
     setBusy(job.id);
     try {
-      const res = await fetch("/api/bom/replace", {
+      const res = await apiFetch("/api/bom/replace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id }),
@@ -98,7 +99,7 @@ export default function History() {
   async function doDelete(job: Job) {
     setDelBusy(true);
     try {
-      const res = await fetch("/api/bom/delete-job", {
+      const res = await apiFetch("/api/bom/delete-job", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id }),

@@ -2,6 +2,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { type ParsedFileDTO, type ResourcesState} from "./types";
 import SheetPreviewModal from "./SheetPreviewModal";
+import { apiFetch } from "@/lib/api-client";
 
 export interface ProcessPayload {
   targetStoredName: string;
@@ -309,7 +310,7 @@ export default function ConfigPanel({
     if (!sheetName) return;
     setSheetUpdating((prev) => ({ ...prev, [storedName]: true }));
     try {
-      const res = await fetch("/api/bom/sheet", {
+      const res = await apiFetch("/api/bom/sheet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId, storedName, sheetName }),

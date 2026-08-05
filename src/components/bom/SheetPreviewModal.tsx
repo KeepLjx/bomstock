@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { PreviewResponse } from "./types";
+import { apiFetch } from "@/lib/api-client";
 interface Props {
   jobId?: string;
   storedName?: string;
@@ -35,7 +36,7 @@ export default function SheetPreviewModal({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/bom/preview", {
+      const res = await apiFetch("/api/bom/preview", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(

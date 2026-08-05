@@ -6,6 +6,7 @@ import ConfirmDialog from "./ConfirmDialog";
 import UpdateRequiredModal from "@/components/bom/UpdateRequiredModal";
 import type { ResourcesState } from "@/components/bom/types";
 import { fetchResources } from "@/lib/bom/client-resources";
+import { apiFetch } from "@/lib/api-client";
 
 interface CurrentInv {
   resourceId: string | null;
@@ -62,8 +63,8 @@ export default function Dashboard() {
   const refresh = useCallback(async () => {
     try {
       const [rtRes, jobsRes, resRes] = await Promise.all([
-        fetch("/api/inventory/realtime", { cache: "no-store" }),
-        fetch("/api/bom/jobs?job_type=occupied_bom", { cache: "no-store" }),
+        apiFetch("/api/inventory/realtime", { cache: "no-store" }),
+        apiFetch("/api/bom/jobs?job_type=occupied_bom", { cache: "no-store" }),
         fetchResources(),
       ]);
       if (rtRes.ok) setSummary((await rtRes.json()) as RealtimeSummary);
@@ -95,7 +96,7 @@ export default function Dashboard() {
       const fd = new FormData();
       fd.append("files", file);
       if (kind === "inventory") {
-        const res = await fetch("/api/inventory/upload", { method: "POST", body: fd });
+        const res = await apiFetch("/api/inventory/upload", { method: "POST", body: fd });
         const data = await res.json();
         if (!res.ok) return flash(false, data.error || "上传失败");
         flash(true, `库存表已设为 current（强制覆盖），共解析 ${data.rows} 条物料`);
@@ -103,14 +104,14 @@ export default function Dashboard() {
         const woFd = new FormData();
         woFd.append("kind", "work_order");
         woFd.append("files", file);
-        const res = await fetch("/api/bom/resources", { method: "POST", body: woFd });
+        const res = await apiFetch("/api/bom/resources", { method: "POST", body: woFd });
         const data = await res.json();
         if (!res.ok) return flash(false, data.error || "上传失败");
         flash(true, `工单调拨齐套报表已强制更新，共 ${data.file?.rowCount ?? 0} 行`);
       } else {
         fd.append("job_type", "occupied_bom");
         if (occSets) fd.append("sets", occSets);
-        const res = await fetch("/api/bom/upload", { method: "POST", body: fd });
+        const res = await apiFetch("/api/bom/upload", { method: "POST", body: fd });
         const data = await res.json();
         if (!res.ok) return flash(false, data.error || "上传失败");
         if (data.duplicate) {
@@ -141,7 +142,7 @@ export default function Dashboard() {
     if (!job.bizKey) return flash(false, "该 BOM 缺少 biz_key，无法替换");
     setJobBusy(job.id);
     try {
-      const res = await fetch("/api/bom/replace", {
+      const res = await apiFetch("/api/bom/replace", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id }),
@@ -159,7 +160,7 @@ export default function Dashboard() {
   async function deleteOccupied(job: OccupiedJob) {
     setJobBusy(job.id);
     try {
-      const res = await fetch("/api/bom/delete-job", {
+      const res = await apiFetch("/api/bom/delete-job", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jobId: job.id }),

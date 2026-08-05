@@ -4,6 +4,8 @@
 // 由用户手势触发，兼容沙箱 iframe（普通 <a href> 跳转 attachment 会被拦截）
 // ============================================================================
 
+import { apiFetch } from "@/lib/api-client";
+
 interface DownloadResult {
   ok: boolean;
   error?: string;
@@ -19,7 +21,7 @@ export async function downloadFile(
   filename: string,
 ): Promise<DownloadResult> {
   try {
-    const res = await fetch(url, { method: "GET" });
+    const res = await apiFetch(url, { method: "GET" });
     if (!res.ok) {
       let msg = `服务器返回 ${res.status}`;
       try {

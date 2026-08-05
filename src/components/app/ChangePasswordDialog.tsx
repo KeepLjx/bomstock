@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { apiFetch } from "@/lib/api-client";
 
 export default function ChangePasswordDialog({ onClose }: { onClose: () => void }) {
   const [oldPassword, setOldPassword] = useState("");
@@ -20,7 +21,7 @@ export default function ChangePasswordDialog({ onClose }: { onClose: () => void 
     }
     setLoading(true);
     try {
-      const res = await fetch("/api/auth/change-password", {
+      const res = await apiFetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ oldPassword, newPassword }),
