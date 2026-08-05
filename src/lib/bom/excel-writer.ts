@@ -68,6 +68,20 @@ function cloneStyle(style: unknown): Record<string, unknown> {
   }
 }
 
+/**
+ * 安全地修改单元格样式：先深拷贝当前样式，打补丁后整体替换。
+ * 不能直接 `cell.fill = ...`：ExcelJS 读取文件时会把样式相同的单元格
+ * 共享同一个样式对象，直接 setter 会污染共享对象，导致颜色扩散到其他单元格。
+ */
+function patchCellStyle(
+  cell: ExcelJS.Cell,
+  patch: Partial<ExcelJS.Style>,
+): void {
+  const style = cloneStyle(cell.style);
+  Object.assign(style, patch);
+  cell.style = style as unknown as ExcelJS.Style;
+}
+
 function getMerges(ws: ExcelJS.Worksheet): string[] {
   const model = (ws as unknown as { model?: { merges?: unknown } }).model;
   const merges = model?.merges;
@@ -142,6 +156,17 @@ export function insertColumnsRight(
       }
       dst.style = cloneStyle(src.style) as unknown as ExcelJS.Style;
       src.value = null;
+      // 新插入的列应保持空白样式：用深拷贝替换原单元格样式并清除填充/字体颜色/加粗。
+      // 注意不能直接 `src.fill = undefined` —— 该 setter 会污染与其他单元格共享的
+      // 样式对象；且原 BOM 该位置的底色（如粉红）会残留到新列。
+      const freshStyle = cloneStyle(src.style);
+      freshStyle.fill = undefined;
+      if (freshStyle.font && typeof freshStyle.font === "object") {
+        const f = freshStyle.font as Record<string, unknown>;
+        delete f.color;
+        delete f.bold;
+      }
+      src.style = freshStyle as unknown as ExcelJS.Style;
     }
     const width = ws.getColumn(col).width;
     if (width !== undefined) ws.getColumn(col + numNewCols).width = width;
@@ -203,8 +228,10 @@ const COLORS = {
 function applyHighlight(cell: ExcelJS.Cell, color: HighlightColor): void {
   if (color === "none") return;
   const c = COLORS[color];
-  cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: c.fill } };
-  cell.font = { ...(cell.font || {}), color: { argb: c.font }, bold: true };
+  patchCellStyle(cell, {
+    fill: { type: "pattern", pattern: "solid", fgColor: { argb: c.fill } },
+    font: { ...(cell.font || {}), color: { argb: c.font }, bold: true },
+  });
 }
 
 export interface NewColumnDef {
@@ -429,14 +456,25 @@ export function modifyOriginalBom(opts: ModifyOptions): TableData {
         const col = analysisFinalPos(k);
         const cell = ws.getCell(xlsxRow, col);
         cell.value = toCellValue(analysisCells[k].v);
-        cell.alignment = { horizontal: "center", vertical: "middle", wrapText: true };
         const st = analysisCellStyle(an, result.highlight);
+        // 统一走 patchCellStyle：整体替换样式对象，避免污染 ExcelJS 共享样式
+        const patch: Partial<ExcelJS.Style> = {
+          alignment: { horizontal: "center", vertical: "middle", wrapText: true },
+        };
         if (st.bc) {
-          cell.fill = { type: "pattern", pattern: "solid", fgColor: argbColor(st.bc) };
+          patch.fill = {
+            type: "pattern",
+            pattern: "solid",
+            fgColor: argbColor(st.bc),
+          };
+        } else {
+          // 无高亮的单元格也显式清除填充，避免原 BOM 底色残留
+          patch.fill = undefined;
         }
         if (st.fc) {
-          cell.font = { ...(cell.font || {}), color: argbColor(st.fc), bold: true };
+          patch.font = { ...(cell.font || {}), color: argbColor(st.fc), bold: true };
         }
+        patchCellStyle(cell, patch);
       });
     }
     // 写入 Excel：一博问题 + JZD
@@ -444,7 +482,7 @@ export function modifyOriginalBom(opts: ModifyOptions): TableData {
       const probCell = ws.getCell(xlsxRow, shiftedYiboProblem);
       if (yiboProblemText) {
         probCell.value = yiboProblemText;
-        probCell.alignment = { vertical: "top", wrapText: true };
+        patchCellStyle(probCell, { alignment: { vertical: "top", wrapText: true } });
       }
       if (yiboGreen) {
         applyHighlight(probCell, "green");
@@ -512,14 +550,27 @@ export async function applyEditsToWorkbook(
       if (!cellData) continue;
       const cell = ws.getCell(xlsxRow, xlsxCol);
       cell.value = toCellValue(cellData.v);
+      // 同样使用 patchCellStyle：避免 setter 污染共享样式对象导致颜色扩散
+      let fontPatch: Partial<ExcelJS.Font> | undefined;
+      let fillPatch: ExcelJS.Fill | undefined;
       if (cellData.fc) {
-        cell.font = { ...(cell.font || {}), color: argbColor(cellData.fc) };
-      }
-      if (cellData.bc) {
-        cell.fill = { type: "pattern", pattern: "solid", fgColor: argbColor(cellData.bc) };
+        fontPatch = { ...(cell.font || {}), color: argbColor(cellData.fc) };
       }
       if (cellData.b) {
-        cell.font = { ...(cell.font || {}), bold: true };
+        fontPatch = { ...(fontPatch || cell.font || {}), bold: true };
+      }
+      if (cellData.bc) {
+        fillPatch = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: argbColor(cellData.bc),
+        };
+      }
+      if (fontPatch || fillPatch) {
+        patchCellStyle(cell, {
+          ...(fontPatch ? { font: fontPatch } : {}),
+          ...(fillPatch ? { fill: fillPatch } : {}),
+        });
       }
     }
   }
