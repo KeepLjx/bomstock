@@ -18,6 +18,17 @@ const STEPS: { key: Step; label: string }[] = [
   { key: "config", label: "配置" },
   { key: "result", label: "结果" },
 ];
+/** 工作流状态持久化键：刷新 / 离开页面后恢复上次会话 */
+const STORAGE_KEY = "bomstock:wizard:v1";
+
+interface PersistedState {
+  step: Step;
+  upload: UploadResponse | null;
+  summary: WorkflowSummaryDTO | null;
+  table: TableDataDTO | null;
+  baseName: string;
+  lastConfig: ProcessPayload | null;
+}
 export default function Wizard() {
   const [step, setStep] = useState<Step>("upload");
   const [upload, setUpload] = useState<UploadResponse | null>(null);
@@ -30,6 +41,8 @@ export default function Wizard() {
   const [resources, setResources] = useState<ResourcesState | null>(null);
   // 保存最近一次配置，便于结果->配置回退时保留（需求 4）
   const [lastConfig, setLastConfig] = useState<ProcessPayload | null>(null);
+  // 是否已完成本地状态恢复（避免 hydration 闪烁）
+  const [restored, setRestored] = useState(false);
   const refreshResources = useCallback(async () => {
     try {
       const r = await fetchResources();
@@ -41,6 +54,57 @@ export default function Wizard() {
   useEffect(() => {
     refreshResources();
   }, [refreshResources]);
+  // 挂载后从 localStorage 恢复上次会话
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const saved = JSON.parse(raw) as Partial<PersistedState>;
+      if (saved.upload) setUpload(saved.upload);
+      if (saved.baseName) setBaseName(saved.baseName);
+      if (saved.lastConfig) setLastConfig(saved.lastConfig);
+      if (saved.summary) setSummary(saved.summary);
+      if (saved.table) setTable(saved.table);
+      if (saved.step === "result" && saved.upload && saved.summary && saved.table) {
+        setStep("result");
+      } else if (saved.step === "config" && saved.upload) {
+        setStep("config");
+      } else {
+        // 数据不完整，回到上传步骤（已上传文件仍会回显）
+        setStep("upload");
+      }
+    } catch {
+      // 解析失败，忽略
+    } finally {
+      setRestored(true);
+    }
+  }, []);
+  // 状态变化时持久化；超出配额时丢弃结果表（需重新执行），保留配置
+  useEffect(() => {
+    if (!restored) return;
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ step, upload, summary, table, baseName, lastConfig }),
+      );
+    } catch {
+      try {
+        localStorage.setItem(
+          STORAGE_KEY,
+          JSON.stringify({
+            step: upload ? "config" : "upload",
+            upload,
+            summary: null,
+            table: null,
+            baseName,
+            lastConfig,
+          }),
+        );
+      } catch {
+        // 持久化不可用，忽略
+      }
+    }
+  }, [restored, step, upload, summary, table, baseName, lastConfig]);
   const handleConfirmed = (res: UploadResponse) => {
     setUpload(res);
     setError(null);
@@ -90,6 +154,11 @@ export default function Wizard() {
     }
   };
   const restart = () => {
+    try {
+      localStorage.removeItem(STORAGE_KEY);
+    } catch {
+      // 忽略
+    }
     setUpload(null);
     setSummary(null);
     setTable(null);
@@ -112,6 +181,14 @@ export default function Wizard() {
     setError(null);
     setStep(target);
   };
+  // 恢复完成前显示占位，避免状态闪烁
+  if (!restored) {
+    return (
+      <div className="py-16 text-center text-sm text-[#9aa0a6]">
+        正在恢复上次会话…
+      </div>
+    );
+  }
   // 是否需要强制更新（库存表或工单表今日未更新）
   const needUpdate =
     !resources ||
